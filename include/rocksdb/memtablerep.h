@@ -85,6 +85,7 @@ class MemTableRep {
   // better. By allowing it to allocate memory, it can possibly put
   // correlated stuff in consecutive memory area to make processor
   // prefetching more efficient.
+  virtual KeyHandle Allocate_Seq(const size_t len, char** buf, uint64_t s);
   virtual KeyHandle Allocate(const size_t len, char** buf);
 
   // Insert key into the collection. (The caller will pack key and value into a
