@@ -800,7 +800,6 @@ namespace rocksdb {
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::AllocateNode_Seq(size_t key_size, int height, uint64_t s ) {
 	//	auto prefix = sizeof(std::atomic<Node*>) * (height - 1) + sizeof(const char*);
-		printf("[JSYEON] AllocateNode_Seq\n");	
 		auto prefix = sizeof(std::atomic<Node*>) * (height + 1);
 		// prefix is space for the height - 1 pointers that we store before
 		// the Node instance (next_[-(height - 1) .. -1]).  Node starts at

@@ -41,7 +41,7 @@ quoted_perl_command = $(subst ','\'',$(perl_command))
 # `make install`
 
 # Set the default DEBUG_LEVEL to 1
-DEBUG_LEVEL?=1
+DEBUG_LEVEL?=0
 
 ifeq ($(MAKECMDGOALS),dbg)
 	DEBUG_LEVEL=2
