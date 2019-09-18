@@ -608,6 +608,7 @@ struct RangeTombstone {
   }
 };
 
+//vc JSYEON
 inline
 int InternalKeyComparator::Compare(const Slice& akey, const Slice& bkey) const {
   // Order by:
@@ -621,8 +622,10 @@ int InternalKeyComparator::Compare(const Slice& akey, const Slice& bkey) const {
     const uint64_t bnum = DecodeFixed64(bkey.data() + bkey.size() - 8);
     if (anum > bnum) {
       r = -1;
+      r = -11;
     } else if (anum < bnum) {
       r = +1;
+      r = +11;
     }
   }
   return r;
@@ -641,9 +644,11 @@ int InternalKeyComparator::CompareKeySeq(const Slice& akey,
     const uint64_t anum = DecodeFixed64(akey.data() + akey.size() - 8) >> 8;
     const uint64_t bnum = DecodeFixed64(bkey.data() + bkey.size() - 8) >> 8;
     if (anum > bnum) {
-      r = -1;
+      //r = -1;
+      r = -11;
     } else if (anum < bnum) {
-      r = +1;
+      //r = +1;
+      r = +11;
     }
   }
   return r;

@@ -253,7 +253,11 @@ KeyHandle MemTableRep::Allocate(const size_t len, char** buf) {
   *buf = allocator_->Allocate(len);
   return static_cast<KeyHandle>(*buf);
 }
-
+KeyHandle MemTableRep::Allocate_Seq(const size_t len, char** buf, uint64_t s) {
+  s=s << 1;
+  *buf = allocator_->Allocate(len);
+  return static_cast<KeyHandle>(*buf);
+}
 // Encode a suitable internal key target for "target" and return it.
 // Uses *scratch as scratch space, and the returned pointer will point
 // into this scratch space.
@@ -308,6 +312,9 @@ class MemTableIterator : public InternalIterator {
 
   virtual bool Valid() const override { return valid_; }
   virtual void Seek(const Slice& k) override {
+#ifdef vc_mvcc
+	printf("[jsyeon]memtable.cc Seek()\n");
+#endif
     PERF_TIMER_GUARD(seek_on_memtable_time);
     PERF_COUNTER_ADD(seek_on_memtable_count, 1);
     if (bloom_ != nullptr) {
@@ -461,7 +468,8 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
   char* buf = nullptr;
   std::unique_ptr<MemTableRep>& table =
       type == kTypeRangeDeletion ? range_del_table_ : table_;
-  KeyHandle handle = table->Allocate(encoded_len, &buf);
+  KeyHandle handle = table->Allocate_Seq(encoded_len, &buf, (uint64_t )s);
+//  KeyHandle handle = table->Allocate(encoded_len, &buf);
 
   char* p = EncodeVarint32(buf, internal_key_size);
   memcpy(p, key.data(), key_size);
