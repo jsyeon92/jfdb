@@ -646,11 +646,8 @@ namespace rocksdb {
 			assert(x == head_ || KeyIsAfterNode(key, x));
 			int cmp = (next == nullptr || next == last_bigger)
 				? 1
-				: compare_(next->Key(), key);
-			if(cmp == +11 || cmp == -11 || cmp == 0){
-				return next;
-			}
-
+				//: compare_(next->Key(), key);
+				: compare_(next->Key(), key, (uint64_t)1);
 			if (cmp == 0 || (cmp > 0 && level == 0)) {
 				return next;
 			}
@@ -1180,6 +1177,10 @@ namespace rocksdb {
 		uint64_t seq_update = update_chain->UnstashSeq();
 
 		if (chain_header == nullptr) {
+			if (curr->CASUpdateChain(nullptr, update_chain)) {
+					return true;
+			}else
+				goto retry;
 			const char* key_curr = curr->Key();//current->key
 			uint32_t key_size = 0;
 			const char* key_ptr = GetVarint32Ptr(key_curr, key_curr + 5, &key_size);

@@ -22,6 +22,8 @@
 #include "util/coding.h"
 #include "util/logging.h"
 
+#define JELLY_SEARCH
+
 namespace rocksdb {
 
 class InternalKey;
@@ -165,6 +167,9 @@ class InternalKeyComparator
   virtual int Compare(const Slice& a, const Slice& b) const override;
   // Same as Compare except that it excludes the value type from comparison
   virtual int CompareKeySeq(const Slice& a, const Slice& b) const;
+#ifdef JELLY_SEARCH
+  virtual int CompareKeySeq_Jelly(const Slice& a, const Slice& b) const;
+#endif
   virtual void FindShortestSeparator(std::string* start,
                                      const Slice& limit) const override;
   virtual void FindShortSuccessor(std::string* key) const override;
@@ -622,10 +627,8 @@ int InternalKeyComparator::Compare(const Slice& akey, const Slice& bkey) const {
     const uint64_t bnum = DecodeFixed64(bkey.data() + bkey.size() - 8);
     if (anum > bnum) {
       r = -1;
-      r = -11;
     } else if (anum < bnum) {
       r = +1;
-      r = +11;
     }
   }
   return r;
@@ -644,15 +647,24 @@ int InternalKeyComparator::CompareKeySeq(const Slice& akey,
     const uint64_t anum = DecodeFixed64(akey.data() + akey.size() - 8) >> 8;
     const uint64_t bnum = DecodeFixed64(bkey.data() + bkey.size() - 8) >> 8;
     if (anum > bnum) {
-      //r = -1;
-      r = -11;
+      r = -1;
     } else if (anum < bnum) {
-      //r = +1;
-      r = +11;
+      r = +1;
     }
   }
   return r;
 }
+#ifdef JELLY_SEARCH
+inline
+int InternalKeyComparator::CompareKeySeq_Jelly(const Slice& akey,
+                                         const Slice& bkey) const {
+  // Order by:
+  //    increasing user key (according to user-supplied comparator)
+  //    decreasing sequence number
+  int r = user_comparator_->Compare(ExtractUserKey(akey), ExtractUserKey(bkey));
+  PERF_COUNTER_ADD(user_key_comparison_count, 1);
+  return r;
+}
 
-
+#endif
 }  // namespace rocksdb

@@ -235,7 +235,16 @@ int MemTable::KeyComparator::operator()(const char* prefix_len_key,
   Slice a = GetLengthPrefixedSlice(prefix_len_key);
   return comparator.CompareKeySeq(a, key);
 }
-
+#ifdef JELLY_SEARCH
+int MemTable::KeyComparator::operator()(const char* prefix_len_key1,
+                                        const char* prefix_len_key2, uint64_t tmp) const {
+  // Internal keys are encoded as length-prefixed strings.
+  Slice k1 = GetLengthPrefixedSlice(prefix_len_key1);
+  Slice k2 = GetLengthPrefixedSlice(prefix_len_key2);
+  tmp +=1;
+  return comparator.CompareKeySeq_Jelly(k1, k2);
+}
+#endif
 void MemTableRep::InsertConcurrently(KeyHandle /*handle*/) {
 #ifndef ROCKSDB_LITE
   throw std::runtime_error("concurrent insert not supported");
@@ -312,9 +321,6 @@ class MemTableIterator : public InternalIterator {
 
   virtual bool Valid() const override { return valid_; }
   virtual void Seek(const Slice& k) override {
-#ifdef vc_mvcc
-	printf("[jsyeon]memtable.cc Seek()\n");
-#endif
     PERF_TIMER_GUARD(seek_on_memtable_time);
     PERF_COUNTER_ADD(seek_on_memtable_count, 1);
     if (bloom_ != nullptr) {

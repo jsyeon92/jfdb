@@ -40,7 +40,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <rocksdb/slice.h>
-
+#define JELLY_SEARCH
 namespace rocksdb {
 
 class Arena;
@@ -69,6 +69,10 @@ class MemTableRep {
 
     // Compare a and b. Return a negative value if a is less than b, 0 if they
     // are equal, and a positive value if a is greater than b
+#ifdef JELLY_SEARCH
+	virtual int operator()(const char* prefix_len_key1,
+						   const char* prefix_len_key2, uint64_t tmp)const=0;
+#endif
     virtual int operator()(const char* prefix_len_key1,
                            const char* prefix_len_key2) const = 0;
 

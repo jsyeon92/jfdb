@@ -10,7 +10,6 @@
 #define STORAGE_ROCKSDB_INCLUDE_COMPARATOR_H_
 
 #include <string>
-
 namespace rocksdb {
 
 class Slice;
