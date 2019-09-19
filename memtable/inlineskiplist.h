@@ -52,6 +52,7 @@
 #ifndef vc
 #include "util/coding.h"
 #include <mutex>
+#include <cstdint>
 #define JSYEON
 #define INTERNAL_SEQ
 
@@ -364,11 +365,13 @@ namespace rocksdb {
 			memcpy(&next_[0], &s, sizeof(uint64_t));
 		}
 
-		int UnstashSeq()const{
-			uint64_t s;
+		uint64_t UnstashSeq(){
+/*			uint64_t s;
 			memcpy(&s, &next_[0], sizeof(uint64_t));
 			assert(s >= 0);
 			return s;
+*/
+			return reinterpret_cast<uint64_t>(next_[0].load(std::memory_order_acquire));
 		}
 #endif
 		// Stores the height of the node in the memory location normally used for
@@ -386,23 +389,23 @@ namespace rocksdb {
 			return rv;
 		}
 #ifndef vc
-		void InitChain() {
+		void InitChain(){
+/*
 			Node* t = nullptr;
 			memcpy(&next_[-1], &t, sizeof(Node*));
-		}
-		const char* ChainKey() const {
-			Node* c = GetChain();
-			if (c == nullptr) return nullptr;
-			return c->Key();
+*/
+			next_[-1].store(nullptr);
 		}
 		Node* GetChain() const {
+/*
 			Node* rv = nullptr;
 			memcpy(&rv, &next_[-1], sizeof(Node *));
 			return rv;
-		}
-		void UpdateChain(const char* key) {
-			assert(sizeof(const char*) <= sizeof(next_[0]));
-			memcpy(&next_[-1], &key, sizeof(Node*));
+*/
+			//return next_[-1].load(std::memory_order_acquire);
+			//return next_[-1].load(std::memory_order_release);
+			return next_[-1].load();
+			
 		}
 		void SetUpdateChain(Node* x) {
 			next_[-1].store(x, std::memory_order_release);
@@ -1150,7 +1153,6 @@ namespace rocksdb {
 		if (key != nullptr) {
 			currUserKey = UserKey(key);
 		}
-
 		if (prev != nullptr && prev->Key() != nullptr) {
 			prevUserKey = UserKey(prev->Key());
 		}
@@ -1173,7 +1175,7 @@ namespace rocksdb {
 		Node* chain_header = curr->GetChain();//node level 0 
 		Node* update_chain = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 
-		uint64_t seq_curr = curr->UnstashSeq();
+//		uint64_t seq_curr = curr->UnstashSeq();
 		uint64_t seq_update = update_chain->UnstashSeq();
 
 		if (chain_header == nullptr) {
@@ -1181,6 +1183,7 @@ namespace rocksdb {
 					return true;
 			}else
 				goto retry;
+/*
 			const char* key_curr = curr->Key();//current->key
 			uint32_t key_size = 0;
 			const char* key_ptr = GetVarint32Ptr(key_curr, key_curr + 5, &key_size);
@@ -1210,6 +1213,7 @@ namespace rocksdb {
 					goto retry;
 				}
 			}
+*/
 		}
 		else {
 			///chain header
