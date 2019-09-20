@@ -55,7 +55,7 @@
 #include <cstdint>
 #define JSYEON
 #define INTERNAL_SEQ
-
+#define NEXT_CHAIN
 #endif
 namespace rocksdb {
 	template <class Comparator>
@@ -211,7 +211,9 @@ namespace rocksdb {
 			// Returns the key at the current position.
 			// REQUIRES: Valid()
 			const char* key() const;
-
+#ifdef NEXT_CHAIN
+			void Next_Chain();
+#endif
 			// Advances to the next position.
 			// REQUIRES: Valid()
 			void Next();
@@ -219,7 +221,9 @@ namespace rocksdb {
 			// Advances to the previous position.
 			// REQUIRES: Valid()
 			void Prev();
-
+#ifdef NEXT_CHAIN
+			void Seek_Chain(const char* target);
+#endif
 			// Advance to the first entry with a key >= target
 			void Seek(const char* target);
 
@@ -252,7 +256,9 @@ namespace rocksdb {
 		Allocator* const allocator_;  // Allocator used for allocations of nodes
 
 		Node* const head_;
-
+#ifdef  INTERNAL_SEQ
+		std::atomic<uint64_t> last_seq;
+#endif
 		// Modified only by Insert().  Read racily by readers, but stale
 		// values are ok.
 		std::atomic<int> max_height_;  // Height of the entire list
@@ -403,8 +409,8 @@ namespace rocksdb {
 			return rv;
 */
 			//return next_[-1].load(std::memory_order_acquire);
-			//return next_[-1].load(std::memory_order_release);
-			return next_[-1].load();
+			return next_[-1].load(std::memory_order_release);
+			//return next_[-1].load();
 			
 		}
 		void SetUpdateChain(Node* x) {
@@ -486,29 +492,27 @@ namespace rocksdb {
 	template <class Comparator>
 	inline const char* InlineSkipList<Comparator>::Iterator::key() const {
 		assert(Valid());
-		if (chain_ == nullptr) {
+		if (chain_ == nullptr)
 			return node_->Key();
-
-		}
-		else {
+		else 
 			return chain_->Key();
-			
-		}
 	}
 
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Next() {
 		node_ = node_->Next(0);
         if(node_ != nullptr){
-			Node* t = node_->GetChain();
-			if(t != nullptr){
-				chain_=t;
-			}else
-				chain_=nullptr;
+			chain_ = node_->GetChain();
 		}else{
 			chain_=nullptr;
 		}
 	}
+#ifdef NEXT_CHAIN
+	template <class Comparator>
+	inline void InlineSkipList<Comparator>::Iterator::Next_Chain() {
+			chain_ = node_->GetChain();
+	}
+#endif
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Prev() {
 		// Instead of using explicit "prev" links, we just search for the
@@ -531,29 +535,34 @@ namespace rocksdb {
 			}
 		}
 	}
-
+#ifdef NEXT_CHAIN
+	template <class Comparator>
+	inline void InlineSkipList<Comparator>::Iterator::Seek_Chain(const char* target) {
+			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+       		if(node_ != nullptr){
+				chain_ = node_->GetChain();//Get level 0 
+			}
+	}
+#endif
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Seek(const char* target) {
-		node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
        		if(node_ != nullptr){
-				Node* t = node_->GetChain();//Get level 0 
-				if (t == nullptr) {
-					chain_ = nullptr;
+				chain_ = node_->GetChain();//Get level 0 
+				if (chain_ == nullptr) {
+					return ;
 				}
 				else {
-					unsigned long seq = GetSequenceNum(target);
-					while(t != nullptr){
-						uint64_t c_seq = t->UnstashSeq();
-						if(seq >= c_seq){
-							chain_ = t;
-							break;
-						}else{
-							t=t->GetChain();
-						}
+					uint64_t seq = GetSequenceNum(target);
+					while(chain_ != nullptr){
+						uint64_t c_seq = chain_->UnstashSeq();
+						if(seq >= c_seq)
+							return ;
+						else
+							chain_=chain_->GetChain();
 					}
 				}
-		}else
-			chain_=nullptr;
+			}
 	}
 
 	template <class Comparator>
@@ -773,6 +782,9 @@ namespace rocksdb {
 		compare_(cmp),
 		allocator_(allocator),
 		head_(AllocateNode(0, max_height)),
+#ifdef INTERNAL_SEQ
+		last_seq(0),
+#endif
 		max_height_(1),
 		seq_splice_(AllocateSplice()) {
 		assert(max_height > 0 && kMaxHeight_ == static_cast<uint32_t>(max_height));
@@ -816,6 +828,7 @@ namespace rocksdb {
 		// however, so that it can perform the proper links.  Since we're not
 		// using the pointers at the moment, StashHeight temporarily borrow
 		// storage from next_[0] for that purpose.
+		last_seq.store(s);
 		x->StashSeq(s);
 		x->StashHeight(height);
 		x->InitChain();
@@ -1179,11 +1192,16 @@ namespace rocksdb {
 		uint64_t seq_update = update_chain->UnstashSeq();
 
 		if (chain_header == nullptr) {
-			if (curr->CASUpdateChain(nullptr, update_chain)) {
-					return true;
-			}else
-				goto retry;
-/*
+			if(UseCAS){
+				if (curr->CASUpdateChain(nullptr, update_chain)) {
+						return true;
+				}else
+					goto retry;
+			}else{
+				curr->SetUpdateChain(update_chain);	
+				return true;
+			}
+/*	
 			const char* key_curr = curr->Key();//current->key
 			uint32_t key_size = 0;
 			const char* key_ptr = GetVarint32Ptr(key_curr, key_curr + 5, &key_size);
@@ -1218,41 +1236,51 @@ namespace rocksdb {
 		else {
 			///chain header
 			Node* prev_chain = chain_header;
-			uint64_t seq_prev = GetSequenceNum(prev_chain->Key());
+			//uint64_t seq_prev = GetSequenceNum(prev_chain->Key());
+			uint64_t seq_prev = prev_chain->UnstashSeq();
 			//next chain node
 			Node* next_chain = prev_chain->GetChain();
 
 			if (seq_update > seq_prev) {//New node insert chain list where front.[1]
 				update_chain->SetUpdateChain(prev_chain);
-				if (curr->CASUpdateChain(prev_chain, update_chain)) {
+				if(UseCAS){
+					if (curr->CASUpdateChain(prev_chain, update_chain)) {
+						return true;
+					}
+					else {
+						goto retry;
+					}
+				}else{
+					curr->SetUpdateChain(update_chain);
 					return true;
-				}
-				else {
-					goto retry;
 				}
 			}
 			else {/// New node insert chain list where another.
 				  //check next chain node if null
 				while (true) {
 					if (next_chain == nullptr) {//[2]
-						if (prev_chain->CASUpdateChain(nullptr, update_chain)) {
+						if(UseCAS){
+							if (prev_chain->CASUpdateChain(nullptr, update_chain))
+								return true;
+							else 
+								goto retry;
+						}else{
+							prev_chain->SetUpdateChain(update_chain);
 							return true;
-						}
-						else {
-							goto retry;
-							//retry
 						}
 					}
 					else {
 						uint64_t seq_next = GetSequenceNum(next_chain->Key());
 						if (seq_update > seq_next) {//[3]
 							update_chain->SetUpdateChain(next_chain);
-							if (prev_chain->CASUpdateChain(next_chain, update_chain)) {
+							if(UseCAS){
+								if (prev_chain->CASUpdateChain(next_chain, update_chain))
+									return true;
+								else 
+									goto retry;
+							}else{
+								prev_chain->SetUpdateChain(update_chain);	
 								return true;
-							}
-							else {
-								goto retry;
-								//retry
 							}
 						}
 						else {//[4] go to while first

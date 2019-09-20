@@ -74,7 +74,18 @@ public:
     // All memory is allocated through allocator; nothing to report here
     return 0;
   }
-
+#ifdef NEXT_CHAIN
+  virtual void Get(const LookupKey& k, void* callback_args,
+                   bool (*callback_func)(void* arg,
+                                         const char* entry)) override {
+    SkipListRep::Iterator iter(&skip_list_);
+    Slice dummy_slice;
+    for (iter.Seek_Chain(dummy_slice, k.memtable_key().data());
+         iter.Valid() && callback_func(callback_args, iter.key());
+         iter.Next_Chain()) {
+    }
+  }
+#else
   virtual void Get(const LookupKey& k, void* callback_args,
                    bool (*callback_func)(void* arg,
                                          const char* entry)) override {
@@ -85,6 +96,7 @@ public:
          iter.Next()) {
     }
   }
+#endif
 
   uint64_t ApproximateNumEntries(const Slice& start_ikey,
                                  const Slice& end_ikey) override {
@@ -120,13 +132,16 @@ public:
     virtual const char* key() const override {
       return iter_.key();
     }
-
+#ifdef NEXT_CHAIN
+	virtual void Next_Chain() {
+		iter_.Next_Chain();
+	}
+#endif
     // Advances to the next position.
     // REQUIRES: Valid()
     virtual void Next() override {
       iter_.Next();
     }
-
     // Advances to the previous position.
     // REQUIRES: Valid()
     virtual void Prev() override {
@@ -134,6 +149,17 @@ public:
     }
 
     // Advance to the first entry with a key >= target
+#ifdef NEXT_CHAIN
+	 virtual void Seek_Chain(const Slice& user_key, const char* memtable_key)
+      {
+      if (memtable_key != nullptr) {
+        iter_.Seek_Chain(memtable_key);
+      } else {
+        iter_.Seek_Chain(EncodeKey(&tmp_, user_key));
+      }
+    }
+
+#endif
     virtual void Seek(const Slice& user_key, const char* memtable_key)
         override {
       if (memtable_key != nullptr) {
