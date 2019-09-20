@@ -140,8 +140,8 @@ namespace rocksdb {
 		bool Insert(const char* key);
 
 #ifndef vc
-		template <bool UseCAS>
 		bool InsertChain(const char* key, const Splice* splice);
+		bool InsertChain_Concurrently(const char* key, const Splice* splice);
 #endif
 
 		// Inserts a key allocated by AllocateKey with a hint of last insert
@@ -1071,7 +1071,7 @@ namespace rocksdb {
 					assert(splice->prev_[i] == head_ ||
 						compare_(splice->prev_[i]->Key(), x->Key()) < 0);
 #ifndef vc
-					if (InsertChain<UseCAS>(key, splice)) return true;
+					if (InsertChain_Concurrently(key, splice)) return true;
 #endif
 					x->NoBarrier_SetNext(i, splice->next_[i]);
 					if (splice->prev_[i]->CASNext(i, splice->next_[i], x)) {
@@ -1119,7 +1119,7 @@ namespace rocksdb {
 					compare_(splice->prev_[i]->Key(), x->Key()) < 0);
 				assert(splice->prev_[i]->Next(i) == splice->next_[i]);
 #ifndef vc
-				if (InsertChain<UseCAS>(key, splice)) return true;
+				if (InsertChain(key, splice)) return true;
 #endif
 				x->NoBarrier_SetNext(i, splice->next_[i]);
 				splice->prev_[i]->SetNext(i, x);
@@ -1153,9 +1153,18 @@ namespace rocksdb {
 	}
 #ifndef vc
 	template <class Comparator>
-	template <bool UseCAS>
-	bool InlineSkipList<Comparator>::InsertChain(const char * key, const Splice* splice) {
-					
+	bool InlineSkipList<Comparator>::InsertChain_Concurrently(const char * key, const Splice* splice) {
+			
+		Node* curr;
+		Node* next = splice->next_[0];
+		if(next != nullptr){
+			if(compare_(key, next->Key(),1)==0)
+				curr=next;
+			else
+				return false;
+		}else
+			return false;
+#if 0	
 		Node* prev = splice->prev_[0];
 		Node* next = splice->next_[0];
 		Node* curr = nullptr;
@@ -1182,7 +1191,7 @@ namespace rocksdb {
 		else {
 			return false;
 		}
-
+#endif
 	retry:
 		
 		Node* chain_header = curr->GetChain();//node level 0 
@@ -1192,15 +1201,10 @@ namespace rocksdb {
 		uint64_t seq_update = update_chain->UnstashSeq();
 
 		if (chain_header == nullptr) {
-			if(UseCAS){
 				if (curr->CASUpdateChain(nullptr, update_chain)) {
 						return true;
 				}else
 					goto retry;
-			}else{
-				curr->SetUpdateChain(update_chain);	
-				return true;
-			}
 /*	
 			const char* key_curr = curr->Key();//current->key
 			uint32_t key_size = 0;
@@ -1243,45 +1247,130 @@ namespace rocksdb {
 
 			if (seq_update > seq_prev) {//New node insert chain list where front.[1]
 				update_chain->SetUpdateChain(prev_chain);
-				if(UseCAS){
-					if (curr->CASUpdateChain(prev_chain, update_chain)) {
-						return true;
-					}
-					else {
-						goto retry;
-					}
-				}else{
-					curr->SetUpdateChain(update_chain);
+				if (curr->CASUpdateChain(prev_chain, update_chain)) {
 					return true;
+				}
+				else {
+					goto retry;
 				}
 			}
 			else {/// New node insert chain list where another.
 				  //check next chain node if null
 				while (true) {
 					if (next_chain == nullptr) {//[2]
-						if(UseCAS){
-							if (prev_chain->CASUpdateChain(nullptr, update_chain))
-								return true;
-							else 
-								goto retry;
-						}else{
-							prev_chain->SetUpdateChain(update_chain);
+						if (prev_chain->CASUpdateChain(nullptr, update_chain))
 							return true;
-						}
+						else 
+							goto retry;
 					}
 					else {
 						uint64_t seq_next = GetSequenceNum(next_chain->Key());
 						if (seq_update > seq_next) {//[3]
 							update_chain->SetUpdateChain(next_chain);
-							if(UseCAS){
-								if (prev_chain->CASUpdateChain(next_chain, update_chain))
-									return true;
-								else 
-									goto retry;
-							}else{
-								prev_chain->SetUpdateChain(update_chain);	
+							if (prev_chain->CASUpdateChain(next_chain, update_chain))
 								return true;
+							else 
+								goto retry;
+						}
+						else {//[4] go to while first
+							prev_chain = next_chain;
+							Node* tmp_chain = next_chain->GetChain();
+							//printf("case4\n");
+							if (tmp_chain != nullptr) {
+								next_chain = next_chain;
 							}
+							else {
+								next_chain = nullptr;
+							}
+						}
+					}
+				}//end while
+			}
+		}
+		printf("value chain fail\n");
+		return false;
+	}
+
+	template <class Comparator>
+	bool InlineSkipList<Comparator>::InsertChain(const char * key, const Splice* splice) {
+					
+		Node* curr ;
+		Node* next = splice->next_[0];
+		if(next != nullptr){
+			if(compare_(key, next->Key(),1)==0)
+				curr=next;
+			else
+				return false;
+		}else
+			return false;
+
+		Node* chain_header = curr->GetChain();//node level 0 
+		Node* update_chain = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
+
+//		uint64_t seq_curr = curr->UnstashSeq();
+		uint64_t seq_update = update_chain->UnstashSeq();
+
+		if (chain_header == nullptr) {
+			curr->SetUpdateChain(update_chain);	
+			return true;
+/*	
+			const char* key_curr = curr->Key();//current->key
+			uint32_t key_size = 0;
+			const char* key_ptr = GetVarint32Ptr(key_curr, key_curr + 5, &key_size);
+			Slice value = GetLengthPrefixedSlice(key_ptr + key_size);
+			uint32_t val_size = static_cast<uint32_t>(value.size());
+			uint32_t internal_key_size = key_size + 8;
+			const uint32_t encoded_len = VarintLength(internal_key_size) + internal_key_size + VarintLength(val_size) + val_size;
+			Node* Header = AllocateNode_Seq(encoded_len, 1, seq_curr);
+			char* headerkey = const_cast<char*>(Header->Key());
+			memcpy(headerkey, key_curr, encoded_len);
+
+			if (seq_update > seq_curr) {//[1]
+				update_chain->SetUpdateChain(Header);
+				if (curr->CASUpdateChain(nullptr, update_chain)) {
+					return true;
+				}
+				else {
+					goto retry;
+				}
+			}
+			else {// [2]
+				Header->SetUpdateChain(update_chain);
+				if (curr->CASUpdateChain(nullptr, Header)) {
+					return true;
+				}
+				else {
+					goto retry;
+				}
+			}
+*/
+		}
+		else {
+			///chain header
+			Node* prev_chain = chain_header;
+			//uint64_t seq_prev = GetSequenceNum(prev_chain->Key());
+			uint64_t seq_prev = prev_chain->UnstashSeq();
+			//next chain node
+			Node* next_chain = prev_chain->GetChain();
+
+			if (seq_update > seq_prev) {//New node insert chain list where front.[1]
+				update_chain->SetUpdateChain(prev_chain);
+				curr->SetUpdateChain(update_chain);
+				return true;
+			}
+			else {/// New node insert chain list where another.
+				  //check next chain node if null
+				while (true) {
+					if (next_chain == nullptr) {//[2]
+						prev_chain->SetUpdateChain(update_chain);
+						return true;
+					}
+					else {
+						uint64_t seq_next = GetSequenceNum(next_chain->Key());
+						if (seq_update > seq_next) {//[3]
+							update_chain->SetUpdateChain(next_chain);
+							prev_chain->SetUpdateChain(update_chain);	
+							return true;
 						}
 						else {//[4] go to while first
 							prev_chain = next_chain;
