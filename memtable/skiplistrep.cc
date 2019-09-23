@@ -168,7 +168,6 @@ public:
         iter_.Seek(EncodeKey(&tmp_, user_key));
       }
     }
-
     // Retreat to the last entry with a key <= target
     virtual void SeekForPrev(const Slice& user_key,
                              const char* memtable_key) override {
