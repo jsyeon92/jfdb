@@ -53,9 +53,11 @@
 #include "util/coding.h"
 #include <mutex>
 #include <cstdint>
+#include <unistd.h> ///sleep
 #define JSYEON
 #define INTERNAL_SEQ
 #define NEXT_CHAIN
+#define TRACE
 #endif
 namespace rocksdb {
 	template <class Comparator>
@@ -108,7 +110,16 @@ namespace rocksdb {
 			printf("==================================================\n");
 		}
 #endif
-
+		void Print_Stat	(){
+			while(1){
+				printf("==================================================\n");
+				printf("Node Num 	: %ld\n", node_cnt.load());
+				printf("Chain Num 	: %ld\n", chain_cnt.load());
+				printf("==================================================\n");
+				sleep(1);
+			}
+		}
+		
 		// Create a new InlineSkipList object that will use "cmp" for comparing
 		// keys, and will allocate memory using "*allocator".  Objects allocated
 		// in the allocator must remain allocated for the lifetime of the
@@ -257,6 +268,11 @@ namespace rocksdb {
 		Node* const head_;
 		// Modified only by Insert().  Read racily by readers, but stale
 		// values are ok.
+#ifdef TRACE
+		std::atomic<uint64_t> node_cnt;
+		std::atomic<uint64_t> chain_cnt;
+		std::thread bg_trace;
+#endif
 		std::atomic<int> max_height_;  // Height of the entire list
 
 									   // seq_splice_ is a Splice used for insertions in the non-concurrent
@@ -782,6 +798,11 @@ namespace rocksdb {
 		compare_(cmp),
 		allocator_(allocator),
 		head_(AllocateNode(0, max_height)),
+#ifdef TRACE
+		node_cnt(0),
+		chain_cnt(0),
+		bg_trace(std::thread([&](){Print_Stat();})),
+#endif
 		max_height_(1),
 		seq_splice_(AllocateSplice()) {
 		assert(max_height > 0 && kMaxHeight_ == static_cast<uint32_t>(max_height));
@@ -1121,6 +1142,7 @@ namespace rocksdb {
 				splice->prev_[i]->SetNext(i, x);
 			}
 		}
+		node_cnt.fetch_add(1);
 		if (splice_is_valid) {
 			for (int i = 0; i < height; ++i) {
 				splice->prev_[i] = x;
@@ -1157,9 +1179,10 @@ namespace rocksdb {
 			curr=next;
 		else
 			return false;
-	
+#ifdef TRACE
+		chain_cnt.fetch_add(1);	
+#endif
 retry:
-		
 		Node* chain_header = curr->GetChain();//node level 0 
 		Node* update_chain = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 
@@ -1275,7 +1298,9 @@ retry:
 			curr=next;
 		else
 			return false;
-
+#ifdef TRACE
+		chain_cnt.fetch_add(1);
+#endif
 		Node* chain_header = curr->GetChain();//node level 0 
 		Node* update_chain = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 
