@@ -57,8 +57,8 @@
 #define JSYEON
 #define INTERNAL_SEQ
 #define NEXT_CHAIN
-#define TRACE
-#define GC
+//#define TRACE
+//#define GC
 #endif
 namespace rocksdb {
 	template <class Comparator>
@@ -120,7 +120,9 @@ namespace rocksdb {
 	
 			gc_node_list(Node* head , Node* tail): head_(head), tail_(tail){}
 		};
+
 		struct gc_node_list free_list;
+		
 		void free_list_add(Node* add){
 			if(free_list.head_ == nullptr){
 				free_list.head_.store(add);
@@ -159,11 +161,13 @@ namespace rocksdb {
 		void Print_Stat	(){
 			while(1){
 				printf("==================================================\n");
-				printf("Node Num 	  : %ld\n", node_cnt.load());
-				printf("Chain Num 	  : %ld\n", chain_cnt.load());
-				printf("free_list_cnt : %ld\n", free_list_cnt.load());
+				printf("Node Num		: %ld\n", node_cnt.load());
+				printf("Chain Num		: %ld\n", chain_cnt.load());
+#ifdef GC
+				printf("free_list_cnt	: %ld\n", free_list_cnt.load());
+#endif
 				printf("==================================================\n");
-				Memory_Reclaim();
+				//Memory_Reclaim();
 				sleep(1);
 			}
 		}
@@ -728,6 +732,7 @@ namespace rocksdb {
 				//: compare_(next->Key(), key);
 				: compare_(next->Key(), key, (uint64_t)1);
 			if (cmp == 0 || (cmp > 0 && level == 0)) {
+				printf("Level: %d\n", level);
 				return next;
 			}
 			else if (cmp < 0) {
@@ -1196,7 +1201,9 @@ namespace rocksdb {
 				splice->prev_[i]->SetNext(i, x);
 			}
 		}
+#ifdef TRACE
 		node_cnt.fetch_add(1);
+#endif
 		if (splice_is_valid) {
 			for (int i = 0; i < height; ++i) {
 				splice->prev_[i] = x;
