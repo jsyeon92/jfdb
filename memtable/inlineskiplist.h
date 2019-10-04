@@ -57,6 +57,7 @@
 #define JSYEON
 #define INTERNAL_SEQ
 #define NEXT_CHAIN
+#define TEST
 //#define TRACE
 //#define GC
 #endif
@@ -364,6 +365,9 @@ namespace rocksdb {
 		// Return true if key is greater than the data stored in "n".  Null n
 		// is considered infinite.  n should not be head_.
 		bool KeyIsAfterNode(const char* key, Node* n) const;
+#ifdef TEST
+		bool KeyIsAfterNode_Seq(const char* key, Node* n) const;
+#endif
 
 		// Returns the earliest node with a key >= key.
 		// Return nullptr if there is no such node.
@@ -706,7 +710,15 @@ namespace rocksdb {
 		assert(n != head_);
 		return (n != nullptr) && (compare_(n->Key(), key) < 0);
 	}
-
+#ifdef TEST
+	template <class Comparator>
+	bool InlineSkipList<Comparator>::KeyIsAfterNode_Seq(const char* key,
+		Node* n) const {
+		// nullptr n is considered infinite
+		assert(n != head_);
+		return (n != nullptr) && (compare_(n->Key(), key) < 0);
+	}
+#endif
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::FindGreaterOrEqual(const char* key) const {
@@ -732,7 +744,7 @@ namespace rocksdb {
 				//: compare_(next->Key(), key);
 				: compare_(next->Key(), key, (uint64_t)1);
 			if (cmp == 0 || (cmp > 0 && level == 0)) {
-				printf("Level: %d\n", level);
+//				printf("Level: %d\n", level);
 				return next;
 			}
 			else if (cmp < 0) {
@@ -1126,7 +1138,9 @@ namespace rocksdb {
 		if (recompute_height > 0) {
 			RecomputeSpliceLevels(key, splice, recompute_height);
 		}
-
+#ifndef vc			
+		if (InsertChain_Concurrently(key, splice)) return true;
+#endif
 		bool splice_is_valid = true;
 		if (UseCAS) {
 			for (int i = 0; i < height; ++i) {
@@ -1146,8 +1160,10 @@ namespace rocksdb {
 						compare_(x->Key(), splice->next_[i]->Key()) < 0);
 					assert(splice->prev_[i] == head_ ||
 						compare_(splice->prev_[i]->Key(), x->Key()) < 0);
+#if 0
 #ifndef vc
 					if (InsertChain_Concurrently(key, splice)) return true;
+#endif
 #endif
 					x->NoBarrier_SetNext(i, splice->next_[i]);
 					if (splice->prev_[i]->CASNext(i, splice->next_[i], x)) {
@@ -1194,8 +1210,10 @@ namespace rocksdb {
 				assert(splice->prev_[i] == head_ ||
 					compare_(splice->prev_[i]->Key(), x->Key()) < 0);
 				assert(splice->prev_[i]->Next(i) == splice->next_[i]);
+#if 0
 #ifndef vc
 				if (InsertChain(key, splice)) return true;
+#endif
 #endif
 				x->NoBarrier_SetNext(i, splice->next_[i]);
 				splice->prev_[i]->SetNext(i, x);
@@ -1236,6 +1254,7 @@ namespace rocksdb {
 			
 		Node* curr;
 		Node* next = splice->next_[0];
+		
 		if(next != nullptr &&  compare_(key, next->Key(),1)==0)
 			curr=next;
 		else
@@ -1355,6 +1374,7 @@ retry:
 					
 		Node* curr ;
 		Node* next = splice->next_[0];
+		
 		if(next != nullptr &&  compare_(key, next->Key(),1)==0)
 			curr=next;
 		else
