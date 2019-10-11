@@ -124,7 +124,7 @@ namespace rocksdb {
 
 		struct gc_node_list free_list;
 		
-		void free_list_add(Node* add){
+		inline void free_list_add(Node* add){
 			if(free_list.head_ == nullptr){
 				free_list.head_.store(add);
 				Node* temp=add->GetChain();
@@ -143,17 +143,25 @@ namespace rocksdb {
 				}
 				free_list.tail_.store(last);
 			}
+			free_list_cnt.fetch_add(1);
+			chain_cnt.fetch_sub(1);
 		}
 #endif
 #ifdef GC
-		void Memory_Reclaim(){
+		inline void Memory_Reclaim(){
+			printf("Memory_Reclaim() Start\n");
+			int chain_length=2;
 			Node* node_= this->head_;
+			if(node_ == nullptr)
+				return;	
 			node_ = node_->Next(0);
 			while(node_ != nullptr ){
 				Node* chain_=nullptr;	
 				int i=0;
-				for(chain_=node_->GetChain(); chain_ != nullptr && i < 2 ;chain_=node_->GetChain(), i++){}
-				free_list_add(chain_);									
+				for(chain_=node_->GetChain(); chain_ != nullptr && i < chain_length ;chain_=chain_->GetChain(), i++){}
+				if(i == chain_length && chain_ != nullptr){
+					free_list_add(chain_);				
+				}					
 				node_ = node_->Next(0);
 			}
 		}
@@ -161,16 +169,33 @@ namespace rocksdb {
 #ifdef TRACE
 		void Print_Stat(){
 			while(1){
-				if(node_cnt.load() > 100){
-				int val=node_cnt;
-//				printf("==================================================\n");
-				printf("Node Num		: %d\n", val);
-//				printf("Chain Num		: %lu\n", chain_cnt);
+				sleep(1);
+				if(chain_cnt.load(std::memory_order_acquire) > 1000){
+					printf("==================================================\n");
+					printf("Node Num		: %d\n", node_cnt.load(std::memory_order_acquire));
+					printf("Chain Num		: %d\n", chain_cnt.load(std::memory_order_acquire));
 #ifdef GC
-//				printf("free_list_cnt	: %lu\n", free_list_cnt.load());
+					printf("free_list_cnt	: %d\n", free_list_cnt.load(std::memory_order_acquire));
 #endif
-//				printf("==================================================\n");
-				sleep(0.01);
+					printf("==================================================\n");
+#ifdef GC
+					Memory_Reclaim();
+#else
+					printf("Memory_Reclaim() Start\n");
+					Node* node_= this->head_;
+					if(node_ == nullptr)
+						return;	
+					node_ = node_->Next(0);
+					while(node_ != nullptr ){
+						Node* chain_=nullptr;	
+						int i=0;
+					for(chain_=node_->GetChain(); chain_ != nullptr && i < 2 ;chain_=node_->GetChain(), i++){}
+						free_list_add(chain_);									
+						node_ = node_->Next(0);
+					}
+						
+#endif
+				sleep(0.1);
 				}
 			}
 		}
