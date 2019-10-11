@@ -58,8 +58,8 @@
 #define INTERNAL_SEQ
 #define NEXT_CHAIN
 #define TEST
-//#define TRACE
-//#define GC
+#define TRACE
+#define GC
 #endif
 namespace rocksdb {
 	template <class Comparator>
@@ -159,17 +159,19 @@ namespace rocksdb {
 		}
 #endif
 #ifdef TRACE
-		void Print_Stat	(){
+		void Print_Stat(){
 			while(1){
-				printf("==================================================\n");
-				printf("Node Num		: %ld\n", node_cnt.load());
-				printf("Chain Num		: %ld\n", chain_cnt.load());
+				if(node_cnt.load() > 100){
+				int val=node_cnt;
+//				printf("==================================================\n");
+				printf("Node Num		: %d\n", val);
+//				printf("Chain Num		: %lu\n", chain_cnt);
 #ifdef GC
-				printf("free_list_cnt	: %ld\n", free_list_cnt.load());
+//				printf("free_list_cnt	: %lu\n", free_list_cnt.load());
 #endif
-				printf("==================================================\n");
-				//Memory_Reclaim();
-				sleep(1);
+//				printf("==================================================\n");
+				sleep(0.01);
+				}
 			}
 		}
 #endif	
@@ -322,11 +324,11 @@ namespace rocksdb {
 		// Modified only by Insert().  Read racily by readers, but stale
 		// values are ok.
 #ifdef TRACE
-		std::atomic<uint64_t> node_cnt;
-		std::atomic<uint64_t> chain_cnt;
-		std::thread bg_trace;
+		std::atomic<int> node_cnt;
+		std::atomic<int> chain_cnt;
+		std::thread* bg;
 #ifdef GC
-		std::atomic<uint64_t> free_list_cnt;
+		std::atomic<int> free_list_cnt;
 #endif
 #endif
 		std::atomic<int> max_height_;  // Height of the entire list
@@ -869,7 +871,7 @@ namespace rocksdb {
 #ifdef TRACE
 		node_cnt(0),
 		chain_cnt(0),
-		bg_trace(std::thread([&](){Print_Stat();})),
+		bg(new std::thread([&](){Print_Stat();})),
 #ifdef GC
 		free_list_cnt(0),
 #endif
