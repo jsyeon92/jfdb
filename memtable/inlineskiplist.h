@@ -524,30 +524,30 @@ namespace rocksdb {
 			assert(n >= 0);
 			// Use an 'acquire load' so that we observe a fully initialized
 			// version of the returned Node.
-			return (next_[-n - 2].load(std::memory_order_acquire));
+			return (next_[-n -3].load(std::memory_order_acquire));
 		}
 
 		void SetNext(int n, Node* x) {
 			assert(n >= 0);
 			// Use a 'release store' so that anybody who reads through this
 			// pointer observes a fully initialized version of the inserted node.
-			next_[-n - 2].store(x, std::memory_order_release);
+			next_[-n - 3].store(x, std::memory_order_release);
 		}
 
 		bool CASNext(int n, Node* expected, Node* x) {
 			assert(n >= 0);
-			return next_[-n - 2].compare_exchange_strong(expected, x);
+			return next_[-n -3].compare_exchange_strong(expected, x);
 		}
 
 		// No-barrier variants that can be safely used in a few locations.
 		Node* NoBarrier_Next(int n) {
 			assert(n >= 0);
-			return next_[-n - 2].load(std::memory_order_relaxed);
+			return next_[-n -3].load(std::memory_order_relaxed);
 		}
 
 		void NoBarrier_SetNext(int n, Node* x) {
 			assert(n >= 0);
-			next_[-n - 2].store(x, std::memory_order_relaxed);
+			next_[-n -3].store(x, std::memory_order_relaxed);
 		}
 
 		// Insert node after prev on specific level.
@@ -924,6 +924,48 @@ namespace rocksdb {
 		return const_cast<char*>(AllocateNode(key_size, RandomHeight())->Key());
 	}
 #ifdef INTERNAL_SEQ
+	template <class Comparator>
+	typename InlineSkipList<Comparator>::Node*
+		InlineSkipList<Comparator>::AllocateNode_Seq(size_t key_size, int height, uint64_t s ) {
+
+		if(free_list_cnt.load() < 100){
+Allocate:
+			auto prefix = sizeof(std::atomic<Node*>) * (height + 2);
+			//chain ptr     +1
+			//node sequence +1
+			//height		+1	
+	
+			char* raw = allocator_->AllocateAligned(prefix + sizeof(Node) + key_size);
+			Node* x = reinterpret_cast<Node*>(raw + prefix);
+	
+			x->StashSeq(s);
+			x->StashHeight(height);
+			x->InitChain();
+			return x;
+		}else{
+			Node* free_node = free_list.head_;
+			int free_node_height = free_node->UnstashHeight();
+			if(free_node_height < height){
+				goto Allocate;
+			}
+			int64_t offset = 0;
+			uint32_t key_length = 0;
+			const char* key = free_node->Key();
+			const char* key_ptr = GetVarint32Ptr(key, key + 5, &key_length);
+			Slice value = GetLengthPrefixedSlice(key_ptr + key_length);
+			uint32_t value_size = static_cast<uint32_t>(value.size());
+			offset = VarintLength(key_length) + key_length + VarintLength(value_size) + value_size;			
+			if((size_t)offset < key_size){
+				goto Allocate;
+			}
+			printf("reused node !\n");
+			if(1)
+				goto Allocate;
+		}	
+	}
+#endif
+
+#ifdef INTERNAL_SEQ_ORIG
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::AllocateNode_Seq(size_t key_size, int height, uint64_t s ) {
