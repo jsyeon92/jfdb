@@ -50,6 +50,7 @@
 #include "util/allocator.h"
 #include "util/random.h"
 #ifndef vc
+#include "concurrentqueue.h"
 #include "util/coding.h"
 #include <mutex>
 #include <cstdint>
@@ -61,6 +62,12 @@
 #define TRACE
 #define GC
 #endif
+
+#define IFDEBUG 1
+#define DEBUG(x) do{ if (IFDEBUG) printf("%s\n",#x); }while(0);
+
+using namespace moodycamel;
+
 namespace rocksdb {
 	template <class Comparator>
 	class InlineSkipList {
@@ -113,91 +120,182 @@ namespace rocksdb {
 		}
 #endif
 #ifdef GC
-		struct gc_node_list{
-			std::atomic<Node*> head_;
-			std::atomic<Node*> tail_;
-			
-			gc_node_list() : head_(nullptr), tail_(nullptr){}
+		struct free_node_entry{
+			Node* node_;
+			size_t height_;
+			free_node_entry() : node_(nullptr), height_(0){}
 	
-			gc_node_list(Node* head , Node* tail): head_(head), tail_(tail){}
+			free_node_entry(Node* node , size_t height): node_(node), height_(height){}
 		};
 
-		struct gc_node_list free_list;
-		
-		inline void free_list_add(Node* add){
-			if(free_list.head_ == nullptr){
-				free_list.head_.store(add);
-				Node* temp=add->GetChain();
-				Node* last=nullptr;
-				while(temp != nullptr){
-					temp = temp->GetChain();	
-					last = temp;
+		ConcurrentQueue<free_node_entry> free_node_queue;
+
+		void free_node_queue_enqueue_next(Node* node){
+			DEBUG(free_node_queue_enqueue_next);
+			Node* next = nullptr;
+			int i=1;
+			DEBUG(latest_chain_key);
+			//PrintKey(node->Key());
+			next = node->GetChain();
+			node->InitChain();
+			node = next;
+			next = nullptr;
+			while(node != nullptr){
+				free_node_entry x(node, node->UnstashHeight());
+				next = node->GetChain();
+				if(next == nullptr){//next chain empty
+					DEBUG(--next_chain_empty);
+					//PrintKey(node->Key());
+					free_node_queue.enqueue(x);
+					node = next;
+					free_list_cnt.fetch_add(i);
+					invalid_cnt.fetch_sub(i);
+					chain_cnt.fetch_sub(i);
+				}else{//next chain push queue
+					DEBUG(--next_chain_exist);
+					//PrintKey(node->Key());
+					node->InitChain();
+					free_node_queue.enqueue(x);
+					node = next;
+					i++;
 				}
-				free_list.tail_.store(last);
-			}else{
-				Node* temp=add->GetChain();
-				Node* last=nullptr;
-				while(temp != nullptr){
-					temp = temp->GetChain();	
-					last = temp;
-				}
-				free_list.tail_.store(last);
+
 			}
-			free_list_cnt.fetch_add(1);
-			chain_cnt.fetch_sub(1);
+		}
+		
+		void free_node_queue_enqueue(Node* node){
+			Node* next = nullptr;
+			int i=1;
+			while(node != nullptr){
+				free_node_entry x(node, node->UnstashHeight());
+				next = node->GetChain();
+				if(next == nullptr){//next chain empty
+					free_node_queue.enqueue(x);
+					node = next;
+					free_list_cnt.fetch_add(i);
+					invalid_cnt.fetch_sub(i);
+				}else{//next chain push queue
+					node->InitChain();
+					free_node_queue.enqueue(x);
+					node = next;
+					i++;
+				}
+
+			}
+		}
+
+#if 0
+		inline void free_list_add(Node* add){
+			DEBUG("free_list_add() Start");
+			if(free_list.head_ == nullptr){
+				DEBUG("free_list.head_ == nullptr");
+				int i = 1;
+				free_list.head_.store(add);
+				Node* next = add->GetChain();
+				Node* last = next;
+				while(next != nullptr){
+					last = next->GetChain();	
+					if(last != nullptr){
+						next = last;
+						i++;
+//						DEBUG("free_list_cnt add [1]");
+					}else
+						last = next;
+				}
+				if(last == nullptr)
+					free_list.tail_.store(add);	
+				else
+					free_list.tail_.store(last);
+				free_list_cnt.fetch_add(i,std::memory_order_relaxed);
+				chain_cnt.fetch_sub(i,std::memory_order_relaxed);
+			}else{
+				DEBUG("free_list.head_ != nullptr");
+				if(free_list.tail_.load()->CASUpdateChain(nullptr,add)){
+					int i=1;
+					Node* next=add->GetChain();
+					Node* last=next;
+					while(next != nullptr){
+						last = next->GetChain();	
+						if(last != nullptr){
+							next = last;
+							i++;
+//							printf("%p\n",last);
+//							printf("%p\n",&last);
+//							DEBUG("next free node[2]");
+						}else
+							last = next;
+					}
+					printf("free_chain_num %d\n",i);
+					if(last == nullptr)
+						free_list.tail_.store(add);
+					else
+						free_list.tail_.store(last);
+	
+					free_list_cnt.fetch_add(i,std::memory_order_relaxed);
+					chain_cnt.fetch_sub(i,std::memory_order_relaxed);
+				}
+			}
+			DEBUG("free_list_add() End");
+		}
+#endif
+#endif
+#ifdef GC
+		inline void Chain_Reclaim_impl(Node* chain){
+			free_node_queue_enqueue_next(chain);
 		}
 #endif
 #ifdef GC
-		inline void Memory_Reclaim(){
-			printf("Memory_Reclaim() Start\n");
-			int chain_length=2;
-			Node* node_= this->head_;
-			if(node_ == nullptr)
-				return;	
-			node_ = node_->Next(0);
-			while(node_ != nullptr ){
-				Node* chain_=nullptr;	
-				int i=0;
-				for(chain_=node_->GetChain(); chain_ != nullptr && i < chain_length ;chain_=chain_->GetChain(), i++){}
-				if(i == chain_length && chain_ != nullptr){
-					free_list_add(chain_);				
-				}					
+		inline void Memory_Reclaim_impl(){
+			int chain_length = 2;
+			Node* node_ = head_;
+			if(node_ != nullptr){
+				DEBUG("Memory_Reclaim() Start");
 				node_ = node_->Next(0);
+				while(node_ != nullptr ){
+					Node* chain_ = nullptr;	
+					int i = 0;
+					Node* last = nullptr;
+					for(chain_=node_->GetChain(); chain_ != nullptr && i < chain_length ;chain_=chain_->GetChain(), i++){ 
+						last = chain_;
+					}
+					if(i == chain_length && chain_ != nullptr){
+						free_node_queue_enqueue(chain_);
+						last->InitChain();
+						break;	
+					}					
+					node_ = node_->Next(0);
+				}
+				DEBUG("Memory_Reclaim() End");
 			}
 		}
 #endif
 #ifdef TRACE
-		void Print_Stat(){
+		inline void Memory_Reclaim(){
+			while(invalid_cnt.load() > 1000){
+				//Print_Stat();
+				Memory_Reclaim_impl();
+				//Print_Stat();
+				sleep(0.1);
+			}
+#ifdef GC1
 			while(1){
-				sleep(1);
-				if(chain_cnt.load(std::memory_order_acquire) > 1000){
+				if(free_list.mutex_.compare_exchange_weak(1,0))
+					break;
+			}
+#endif
+		}
+		void Print_Stat(){
 					printf("==================================================\n");
 					printf("Node Num		: %d\n", node_cnt.load(std::memory_order_acquire));
 					printf("Chain Num		: %d\n", chain_cnt.load(std::memory_order_acquire));
 #ifdef GC
-					printf("free_list_cnt	: %d\n", free_list_cnt.load(std::memory_order_acquire));
+					printf("Invalid Num		: %d\n", invalid_cnt.load(std::memory_order_acquire));
+					printf("Free_list_cnt	: %d\n", free_list_cnt.load(std::memory_order_acquire));
+					printf("Reused_Node_cnt	: %d\n", reused_cnt.load());
 #endif
 					printf("==================================================\n");
 #ifdef GC
-					Memory_Reclaim();
-#else
-					printf("Memory_Reclaim() Start\n");
-					Node* node_= this->head_;
-					if(node_ == nullptr)
-						return;	
-					node_ = node_->Next(0);
-					while(node_ != nullptr ){
-						Node* chain_=nullptr;	
-						int i=0;
-					for(chain_=node_->GetChain(); chain_ != nullptr && i < 2 ;chain_=node_->GetChain(), i++){}
-						free_list_add(chain_);									
-						node_ = node_->Next(0);
-					}
-						
 #endif
-				sleep(0.1);
-				}
-			}
 		}
 #endif	
 		// Create a new InlineSkipList object that will use "cmp" for comparing
@@ -351,9 +449,11 @@ namespace rocksdb {
 #ifdef TRACE
 		std::atomic<int> node_cnt;
 		std::atomic<int> chain_cnt;
-		std::thread* bg;
+		//std::thread* bg;
 #ifdef GC
+		std::atomic<int> invalid_cnt;
 		std::atomic<int> free_list_cnt;
+		std::atomic<int> reused_cnt;
 #endif
 #endif
 		std::atomic<int> max_height_;  // Height of the entire list
@@ -494,16 +594,16 @@ namespace rocksdb {
 			Node* t = nullptr;
 			memcpy(&next_[-1], &t, sizeof(Node*));
 */
-			next_[-1].store(nullptr);
+			next_[-1].store(nullptr, std::memory_order_relaxed);
 		}
 		Node* GetChain() const {
-/*
+
 			Node* rv = nullptr;
 			memcpy(&rv, &next_[-1], sizeof(Node *));
 			return rv;
-*/
+
 			//return next_[-1].load(std::memory_order_acquire);
-			return next_[-1].load(std::memory_order_release);
+//			return next_[-1].load(std::memory_order_release);
 			//return next_[-1].load();
 			
 		}
@@ -896,9 +996,10 @@ namespace rocksdb {
 #ifdef TRACE
 		node_cnt(0),
 		chain_cnt(0),
-		bg(new std::thread([&](){Print_Stat();})),
 #ifdef GC
+		invalid_cnt(0),
 		free_list_cnt(0),
+		reused_cnt(0),
 #endif
 #endif
 		max_height_(1),
@@ -911,6 +1012,7 @@ namespace rocksdb {
 		for (int i = 0; i < kMaxHeight_; ++i) {
 			head_->SetNext(i, nullptr);
 		}
+		DEBUG(CreateInlineSkipList);
 	}
 #ifdef INTERNAL_SEQ
 	template <class Comparator>
@@ -928,7 +1030,7 @@ namespace rocksdb {
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::AllocateNode_Seq(size_t key_size, int height, uint64_t s ) {
 
-		if(free_list_cnt.load() < 100){
+		if(free_node_queue.size_approx() < 10){
 Allocate:
 			auto prefix = sizeof(std::atomic<Node*>) * (height + 2);
 			//chain ptr     +1
@@ -943,24 +1045,39 @@ Allocate:
 			x->InitChain();
 			return x;
 		}else{
-			Node* free_node = free_list.head_;
-			int free_node_height = free_node->UnstashHeight();
-			if(free_node_height < height){
+			free_node_entry x; 
+			bool found = free_node_queue.try_dequeue(x);
+			if(!found){
+				DEBUG("free_node_dequeue fail");
 				goto Allocate;
 			}
-			int64_t offset = 0;
+			DEBUG("Start reallocate memory");
+			Node* free_node = x.node_;
+			int free_node_height = x.height_;
+			if(free_node_height < height){
+				free_node_queue.enqueue(x);
+				goto Allocate;
+			}
+			int64_t free_key_length = 0;
 			uint32_t key_length = 0;
 			const char* key = free_node->Key();
 			const char* key_ptr = GetVarint32Ptr(key, key + 5, &key_length);
 			Slice value = GetLengthPrefixedSlice(key_ptr + key_length);
 			uint32_t value_size = static_cast<uint32_t>(value.size());
-			offset = VarintLength(key_length) + key_length + VarintLength(value_size) + value_size;			
-			if((size_t)offset < key_size){
+			free_key_length = VarintLength(key_length) + key_length + VarintLength(value_size) + value_size;
+	
+			if((size_t)free_key_length < key_size){
+				free_node_queue.enqueue(x);
 				goto Allocate;
 			}
-			printf("reused node !\n");
-			if(1)
-				goto Allocate;
+
+			DEBUG("Reused memory");				
+			free_list_cnt.fetch_sub(1);
+			reused_cnt.fetch_add(1);
+			free_node->StashSeq(s);
+			free_node->StashHeight(height);
+			free_node->InitChain();
+			return free_node;
 		}	
 	}
 #endif
@@ -1324,7 +1441,7 @@ Allocate:
 		Node* curr;
 		Node* next = splice->next_[0];
 		
-		if(next != nullptr &&  compare_(key, next->Key(),1)==0)
+		if(next != nullptr && compare_(key, next->Key(), 1) == 0)
 			curr=next;
 		else
 			return false;
@@ -1340,8 +1457,10 @@ retry:
 #if 1
 			if (curr->CASUpdateChain(nullptr, update_chain)) {
 					return true;
-			}else
+			}else{
+				DEBUG(Insert Chain Retry);
 				goto retry;
+			}
 #else
 			uint64_t seq_curr = curr->UnstashSeq();
 			const char* key_curr = curr->Key();//current->key
@@ -1384,9 +1503,16 @@ retry:
 			//Node* next_chain = prev_chain->GetChain();
 			update_chain->SetUpdateChain(prev_chain);
 			if (curr->CASUpdateChain(prev_chain, update_chain)) {
+#ifdef GC
+				invalid_cnt.fetch_add(1);
+				//Print_Stat();
+				Chain_Reclaim_impl(update_chain);
+				Print_Stat();
+#endif
 				return true;
 			}
 			else {
+				DEBUG(Insert Chain Retry);
 				goto retry;
 			}
 		

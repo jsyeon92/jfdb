@@ -475,6 +475,8 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
   std::unique_ptr<MemTableRep>& table =
       type == kTypeRangeDeletion ? range_del_table_ : table_;
   KeyHandle handle = table->Allocate_Seq(encoded_len, &buf, (uint64_t )s);
+  if(type == kTypeRangeDeletion)
+		 printf("Range_del_tabeel Insert\n");
 //  KeyHandle handle = table->Allocate(encoded_len, &buf);
 
   char* p = EncodeVarint32(buf, internal_key_size);
