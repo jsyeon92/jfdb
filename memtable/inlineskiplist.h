@@ -63,8 +63,11 @@
 #define GC
 #endif
 
-#define IFDEBUG 1
-#define DEBUG(x) do{ if (IFDEBUG) printf("%s\n",#x); }while(0);
+#define INFO	2
+#define DEBUG	1
+
+#define DEBUGLEVEL 2  
+#define DEBUG_PRINT(level, x) do{ if (level == INFO) printf("%s\n",#x); }while(0);
 
 using namespace moodycamel;
 
@@ -128,34 +131,35 @@ namespace rocksdb {
 			free_node_entry(Node* node , size_t height): node_(node), height_(height){}
 		};
 
-		ConcurrentQueue<free_node_entry> free_node_queue;
+		ConcurrentQueue<free_node_entry> free_node_queue[14];
 
 		void free_node_queue_enqueue_next(Node* node){
-			DEBUG(free_node_queue_enqueue_next);
+			DEBUG_PRINT(DEBUG, free_node_queue_enqueue_next);
 			Node* next = nullptr;
 			int i=1;
-			DEBUG(latest_chain_key);
+			DEBUG_PRINT(DEBUG, latest_chain_key);
 			//PrintKey(node->Key());
 			next = node->GetChain();
 			node->InitChain();
 			node = next;
 			next = nullptr;
 			while(node != nullptr){
+				size_t height = node->UnstashHeight();
 				free_node_entry x(node, node->UnstashHeight());
 				next = node->GetChain();
 				if(next == nullptr){//next chain empty
-					DEBUG(--next_chain_empty);
+					DEBUG_PRINT(DEBUG, --next_chain_empty);
 					//PrintKey(node->Key());
-					free_node_queue.enqueue(x);
+					free_node_queue[height].enqueue(x);
 					node = next;
 					free_list_cnt.fetch_add(i);
 					invalid_cnt.fetch_sub(i);
 					chain_cnt.fetch_sub(i);
 				}else{//next chain push queue
-					DEBUG(--next_chain_exist);
+					DEBUG_PRINT(DEBUG, --next_chain_exist);
 					//PrintKey(node->Key());
 					node->InitChain();
-					free_node_queue.enqueue(x);
+					free_node_queue[height].enqueue(x);
 					node = next;
 					i++;
 				}
@@ -163,6 +167,7 @@ namespace rocksdb {
 			}
 		}
 		
+#if 0
 		void free_node_queue_enqueue(Node* node){
 			Node* next = nullptr;
 			int i=1;
@@ -184,7 +189,6 @@ namespace rocksdb {
 			}
 		}
 
-#if 0
 		inline void free_list_add(Node* add){
 			DEBUG("free_list_add() Start");
 			if(free_list.head_ == nullptr){
@@ -249,7 +253,7 @@ namespace rocksdb {
 			int chain_length = 2;
 			Node* node_ = head_;
 			if(node_ != nullptr){
-				DEBUG("Memory_Reclaim() Start");
+				DEBUG_PRINT(DEBUG,"Memory_Reclaim() Start");
 				node_ = node_->Next(0);
 				while(node_ != nullptr ){
 					Node* chain_ = nullptr;	
@@ -265,7 +269,7 @@ namespace rocksdb {
 					}					
 					node_ = node_->Next(0);
 				}
-				DEBUG("Memory_Reclaim() End");
+				DEBUG_PRINT(DEBUG,"Memory_Reclaim() End");
 			}
 		}
 #endif
@@ -1012,7 +1016,7 @@ namespace rocksdb {
 		for (int i = 0; i < kMaxHeight_; ++i) {
 			head_->SetNext(i, nullptr);
 		}
-		DEBUG(CreateInlineSkipList);
+		DEBUG_PRINT(DEBUG,CreateInlineSkipList);
 	}
 #ifdef INTERNAL_SEQ
 	template <class Comparator>
@@ -1030,14 +1034,15 @@ namespace rocksdb {
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::AllocateNode_Seq(size_t key_size, int height, uint64_t s ) {
 
-		if(free_node_queue.size_approx() < 10){
 Allocate:
+		if(free_node_queue[height].size_approx() < 3){
 			auto prefix = sizeof(std::atomic<Node*>) * (height + 2);
 			//chain ptr     +1
 			//node sequence +1
 			//height		+1	
 	
 			char* raw = allocator_->AllocateAligned(prefix + sizeof(Node) + key_size);
+			printf("allocate : %ld\n",prefix + sizeof(Node) + key_size);
 			Node* x = reinterpret_cast<Node*>(raw + prefix);
 	
 			x->StashSeq(s);
@@ -1046,18 +1051,20 @@ Allocate:
 			return x;
 		}else{
 			free_node_entry x; 
-			bool found = free_node_queue.try_dequeue(x);
+			bool found = free_node_queue[height].try_dequeue(x);
 			if(!found){
-				DEBUG("free_node_dequeue fail");
+				DEBUG_PRINT(DEBUG,"free_node_dequeue fail");
 				goto Allocate;
 			}
-			DEBUG("Start reallocate memory");
+			DEBUG_PRINT(DEBUG,"Start reallocate memory");
 			Node* free_node = x.node_;
+/*
 			int free_node_height = x.height_;
 			if(free_node_height < height){
 				free_node_queue.enqueue(x);
 				goto Allocate;
 			}
+*/
 			int64_t free_key_length = 0;
 			uint32_t key_length = 0;
 			const char* key = free_node->Key();
@@ -1067,11 +1074,11 @@ Allocate:
 			free_key_length = VarintLength(key_length) + key_length + VarintLength(value_size) + value_size;
 	
 			if((size_t)free_key_length < key_size){
-				free_node_queue.enqueue(x);
+				free_node_queue[height].enqueue(x);
 				goto Allocate;
 			}
-
-			DEBUG("Reused memory");				
+			//DEBUG_PRINT(INFO, resued memory);
+			DEBUG_PRINT(DEBUG,"Reused memory");				
 			free_list_cnt.fetch_sub(1);
 			reused_cnt.fetch_add(1);
 			free_node->StashSeq(s);
@@ -1458,7 +1465,7 @@ retry:
 			if (curr->CASUpdateChain(nullptr, update_chain)) {
 					return true;
 			}else{
-				DEBUG(Insert Chain Retry);
+				DEBUG_PRINT(DEBUG,Insert Chain Retry);
 				goto retry;
 			}
 #else
@@ -1507,12 +1514,12 @@ retry:
 				invalid_cnt.fetch_add(1);
 				//Print_Stat();
 				Chain_Reclaim_impl(update_chain);
-				Print_Stat();
+				//Print_Stat();
 #endif
 				return true;
 			}
 			else {
-				DEBUG(Insert Chain Retry);
+				DEBUG_PRINT(DEBUG,Insert Chain Retry);
 				goto retry;
 			}
 		
