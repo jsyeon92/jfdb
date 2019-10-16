@@ -57,9 +57,7 @@
 #define JSYEON
 #define INTERNAL_SEQ
 #define NEXT_CHAIN
-#define TEST
-#define TRACE
-#define GC
+//#define TRACE
 #endif
 namespace rocksdb {
 	template <class Comparator>
@@ -112,94 +110,6 @@ namespace rocksdb {
 			printf("==================================================\n");
 		}
 #endif
-#ifdef GC
-		struct gc_node_list{
-			std::atomic<Node*> head_;
-			std::atomic<Node*> tail_;
-			
-			gc_node_list() : head_(nullptr), tail_(nullptr){}
-	
-			gc_node_list(Node* head , Node* tail): head_(head), tail_(tail){}
-		};
-
-		struct gc_node_list free_list;
-		
-		inline void free_list_add(Node* add){
-			if(free_list.head_ == nullptr){
-				free_list.head_.store(add);
-				Node* temp=add->GetChain();
-				Node* last=nullptr;
-				while(temp != nullptr){
-					temp = temp->GetChain();	
-					last = temp;
-				}
-				free_list.tail_.store(last);
-			}else{
-				Node* temp=add->GetChain();
-				Node* last=nullptr;
-				while(temp != nullptr){
-					temp = temp->GetChain();	
-					last = temp;
-				}
-				free_list.tail_.store(last);
-			}
-			free_list_cnt.fetch_add(1);
-			chain_cnt.fetch_sub(1);
-		}
-#endif
-#ifdef GC
-		inline void Memory_Reclaim(){
-			printf("Memory_Reclaim() Start\n");
-			int chain_length=2;
-			Node* node_= this->head_;
-			if(node_ == nullptr)
-				return;	
-			node_ = node_->Next(0);
-			while(node_ != nullptr ){
-				Node* chain_=nullptr;	
-				int i=0;
-				for(chain_=node_->GetChain(); chain_ != nullptr && i < chain_length ;chain_=chain_->GetChain(), i++){}
-				if(i == chain_length && chain_ != nullptr){
-					free_list_add(chain_);				
-				}					
-				node_ = node_->Next(0);
-			}
-		}
-#endif
-#ifdef TRACE
-		void Print_Stat(){
-			while(1){
-				sleep(1);
-				if(chain_cnt.load(std::memory_order_acquire) > 1000){
-					printf("==================================================\n");
-					printf("Node Num		: %d\n", node_cnt.load(std::memory_order_acquire));
-					printf("Chain Num		: %d\n", chain_cnt.load(std::memory_order_acquire));
-#ifdef GC
-					printf("free_list_cnt	: %d\n", free_list_cnt.load(std::memory_order_acquire));
-#endif
-					printf("==================================================\n");
-#ifdef GC
-					Memory_Reclaim();
-#else
-					printf("Memory_Reclaim() Start\n");
-					Node* node_= this->head_;
-					if(node_ == nullptr)
-						return;	
-					node_ = node_->Next(0);
-					while(node_ != nullptr ){
-						Node* chain_=nullptr;	
-						int i=0;
-					for(chain_=node_->GetChain(); chain_ != nullptr && i < 2 ;chain_=node_->GetChain(), i++){}
-						free_list_add(chain_);									
-						node_ = node_->Next(0);
-					}
-						
-#endif
-				sleep(0.1);
-				}
-			}
-		}
-#endif	
 		// Create a new InlineSkipList object that will use "cmp" for comparing
 		// keys, and will allocate memory using "*allocator".  Objects allocated
 		// in the allocator must remain allocated for the lifetime of the
@@ -351,10 +261,6 @@ namespace rocksdb {
 #ifdef TRACE
 		std::atomic<int> node_cnt;
 		std::atomic<int> chain_cnt;
-		std::thread* bg;
-#ifdef GC
-		std::atomic<int> free_list_cnt;
-#endif
 #endif
 		std::atomic<int> max_height_;  // Height of the entire list
 
@@ -392,9 +298,6 @@ namespace rocksdb {
 		// Return true if key is greater than the data stored in "n".  Null n
 		// is considered infinite.  n should not be head_.
 		bool KeyIsAfterNode(const char* key, Node* n) const;
-#ifdef TEST
-		bool KeyIsAfterNode_Seq(const char* key, Node* n) const;
-#endif
 
 		// Returns the earliest node with a key >= key.
 		// Return nullptr if there is no such node.
@@ -737,14 +640,6 @@ namespace rocksdb {
 		assert(n != head_);
 		return (n != nullptr) && (compare_(n->Key(), key) < 0);
 	}
-#ifdef TEST
-	template <class Comparator>
-	bool InlineSkipList<Comparator>::KeyIsAfterNode_Seq(const char* key,
-		Node* n) const {
-		// nullptr n is considered infinite
-		assert(n != head_);
-		return (n != nullptr) && (compare_(n->Key(), key) < 0);
-	}
 #endif
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
@@ -896,10 +791,6 @@ namespace rocksdb {
 #ifdef TRACE
 		node_cnt(0),
 		chain_cnt(0),
-		bg(new std::thread([&](){Print_Stat();})),
-#ifdef GC
-		free_list_cnt(0),
-#endif
 #endif
 		max_height_(1),
 		seq_splice_(AllocateSplice()) {
