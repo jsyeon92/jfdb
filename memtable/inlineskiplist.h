@@ -1033,9 +1033,9 @@ namespace rocksdb {
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::AllocateNode_Seq(size_t key_size, int height, uint64_t s ) {
-
+			int i=0;
 Allocate:
-		if(free_node_queue[height].size_approx() < 3){
+		if(free_node_queue[height].size_approx() < 5 || i > 5){
 			auto prefix = sizeof(std::atomic<Node*>) * (height + 2);
 			//chain ptr     +1
 			//node sequence +1
@@ -1050,6 +1050,7 @@ Allocate:
 			x->InitChain();
 			return x;
 		}else{
+			i++;
 			free_node_entry x; 
 			bool found = free_node_queue[height].try_dequeue(x);
 			if(!found){
@@ -1077,7 +1078,7 @@ Allocate:
 				free_node_queue[height].enqueue(x);
 				goto Allocate;
 			}
-			//DEBUG_PRINT(INFO, resued memory);
+			DEBUG_PRINT(INFO, reused_memory);
 			DEBUG_PRINT(DEBUG,"Reused memory");				
 			free_list_cnt.fetch_sub(1);
 			reused_cnt.fetch_add(1);
