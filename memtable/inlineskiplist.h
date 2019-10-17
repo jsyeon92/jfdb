@@ -582,14 +582,14 @@ namespace rocksdb {
 		// next_[0].  This is used for passing data from AllocateKey to Insert.
 		void StashHeight(const int height) {
 			assert(sizeof(int) <= sizeof(next_[-2]));
-			memcpy(&next_[-2], &height, sizeof(int));
+			memcpy(&next_[-1], &height, sizeof(int));
 		}
 
 		// Retrieves the value passed to StashHeight.  Undefined after a call
 		// to SetNext or NoBarrier_SetNext.
 		int UnstashHeight() const {
 			int rv;
-			memcpy(&rv, &next_[-2], sizeof(int));
+			memcpy(&rv, &next_[-1], sizeof(int));
 			return rv;
 		}
 #ifndef vc
@@ -598,12 +598,12 @@ namespace rocksdb {
 			Node* t = nullptr;
 			memcpy(&next_[-1], &t, sizeof(Node*));
 */
-			next_[-1].store(nullptr, std::memory_order_relaxed);
+			next_[0].store(nullptr, std::memory_order_relaxed);
 		}
 		Node* GetChain() const {
 
 			Node* rv = nullptr;
-			memcpy(&rv, &next_[-1], sizeof(Node *));
+			memcpy(&rv, &next_[0], sizeof(Node *));
 			return rv;
 
 			//return next_[-1].load(std::memory_order_acquire);
@@ -612,10 +612,10 @@ namespace rocksdb {
 			
 		}
 		void SetUpdateChain(Node* x) {
-			next_[-1].store(x, std::memory_order_release);
+			next_[0].store(x, std::memory_order_release);
 		}
 		bool CASUpdateChain(Node* expected, Node* x) {
-			return next_[-1].compare_exchange_strong(expected, x);
+			return next_[0].compare_exchange_strong(expected, x);
 		}
 #endif
 
@@ -628,30 +628,30 @@ namespace rocksdb {
 			assert(n >= 0);
 			// Use an 'acquire load' so that we observe a fully initialized
 			// version of the returned Node.
-			return (next_[-n -3].load(std::memory_order_acquire));
+			return (next_[-n -1].load(std::memory_order_acquire));
 		}
 
 		void SetNext(int n, Node* x) {
 			assert(n >= 0);
 			// Use a 'release store' so that anybody who reads through this
 			// pointer observes a fully initialized version of the inserted node.
-			next_[-n - 3].store(x, std::memory_order_release);
+			next_[-n - 1].store(x, std::memory_order_release);
 		}
 
 		bool CASNext(int n, Node* expected, Node* x) {
 			assert(n >= 0);
-			return next_[-n -3].compare_exchange_strong(expected, x);
+			return next_[-n -1].compare_exchange_strong(expected, x);
 		}
 
 		// No-barrier variants that can be safely used in a few locations.
 		Node* NoBarrier_Next(int n) {
 			assert(n >= 0);
-			return next_[-n -3].load(std::memory_order_relaxed);
+			return next_[-n -1].load(std::memory_order_relaxed);
 		}
 
 		void NoBarrier_SetNext(int n, Node* x) {
 			assert(n >= 0);
-			next_[-n -3].store(x, std::memory_order_relaxed);
+			next_[-n -1].store(x, std::memory_order_relaxed);
 		}
 
 		// Insert node after prev on specific level.
@@ -760,7 +760,8 @@ namespace rocksdb {
 				else {
 					uint64_t seq = GetSequenceNum(target);
 					while(chain_ != nullptr){
-						uint64_t c_seq = chain_->UnstashSeq();
+						uint64_t c_seq = GetSequenceNum(chain_->Key());
+//						uint64_t c_seq = chain_->UnstashSeq();
 						if(seq >= c_seq)
 							return ;
 						else
@@ -1036,16 +1037,16 @@ namespace rocksdb {
 			int i=0;
 Allocate:
 		if(free_node_queue[height].size_approx() < 5 || i > 5){
-			auto prefix = sizeof(std::atomic<Node*>) * (height + 2);
+			auto prefix = sizeof(std::atomic<Node*>) * (height);
 			//chain ptr     +1
-			//node sequence +1
-			//height		+1	
+			//node sequence +1 //delete for emmory space 
+			//height		+1 //delete for memory space	
 	
 			char* raw = allocator_->AllocateAligned(prefix + sizeof(Node) + key_size);
 			printf("allocate : %ld\n",prefix + sizeof(Node) + key_size);
 			Node* x = reinterpret_cast<Node*>(raw + prefix);
-	
-			x->StashSeq(s);
+			s--;	
+			//x->StashSeq(s);
 			x->StashHeight(height);
 			x->InitChain();
 			return x;
@@ -1082,7 +1083,7 @@ Allocate:
 			DEBUG_PRINT(DEBUG,"Reused memory");				
 			free_list_cnt.fetch_sub(1);
 			reused_cnt.fetch_add(1);
-			free_node->StashSeq(s);
+			//free_node->StashSeq(s);
 			free_node->StashHeight(height);
 			free_node->InitChain();
 			return free_node;
@@ -1456,10 +1457,27 @@ Allocate:
 #ifdef TRACE
 		chain_cnt.fetch_add(1);	
 #endif
+/*
+		const char* key_curr = key;
+		uint32_t key_size=0;
+		const char* key_ptr = GetVarint32Ptr(key_curr, key_curr + 5, &key_size);
+		Slice value = GetLengthPrefixedSlice(key_ptr + key_size);
+		uint32_t val_size = static_cast<uint32_t>(value.size());
+		uint32_t internal_key_size = key_size + 8;
+		const uint32_t encoded_len = VarintLength(internal_key_size) + internal_key_size + VarintLength(val_size) + val_size;
+		Node* Header = AllocateNode_Seq(encoded_len, 1, 0);
+		char* headerkey = const_cast<char*>(Header->Key());
+		memcpy(headerkey, key_curr, encoded_len);
+	
+		Node* node = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
+		free_node_entry x(node, node->UnstashHeight());
+		free_node_queue[node->UnstashHeight()].enqueue(x);
+		
+*/
 retry:
 		Node* chain_header = curr->GetChain();//node level 0 
 		Node* update_chain = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
-
+		
 		//uint64_t seq_update = update_chain->UnstashSeq();
 		if (chain_header == nullptr) {
 #if 1
