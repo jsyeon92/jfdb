@@ -643,7 +643,6 @@ namespace rocksdb {
 		assert(n != head_);
 		return (n != nullptr) && (compare_(n->Key(), key) < 0);
 	}
-#endif
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::FindGreaterOrEqual(const char* key) const {
