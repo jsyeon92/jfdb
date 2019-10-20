@@ -62,11 +62,12 @@
 #define TRACE
 #define GC
 #endif
-
+#define MAX_HEIGHT 65
+#define P_FACTOR 2
 #define INFO	2
 #define DEBUG	1
 
-#define DEBUGLEVEL 2  
+#define DEBUGLEVEL 3 
 #define DEBUG_PRINT(level, x) do{ if (level == INFO) printf("%s\n",#x); }while(0);
 
 using namespace moodycamel;
@@ -131,7 +132,7 @@ namespace rocksdb {
 			free_node_entry(Node* node , size_t height): node_(node), height_(height){}
 		};
 
-		ConcurrentQueue<free_node_entry> free_node_queue[14];
+		ConcurrentQueue<free_node_entry> free_node_queue[MAX_HEIGHT];
 
 		void free_node_queue_enqueue_next(Node* node){
 			DEBUG_PRINT(DEBUG, free_node_queue_enqueue_next);
@@ -307,8 +308,10 @@ namespace rocksdb {
 		// in the allocator must remain allocated for the lifetime of the
 		// skiplist object.
 		explicit InlineSkipList(Comparator cmp, Allocator* allocator,
-			int32_t max_height = 12,
-			int32_t branching_factor = 4);
+			int32_t max_height = MAX_HEIGHT,
+//			int32_t max_height = 12,
+			int32_t branching_factor = P_FACTOR);
+//			int32_t branching_factor = 4);
 
 		// Allocates a key and a skip-list node, returning a pointer to the key
 		// portion of the node.  This method is thread-safe if the allocator
@@ -825,10 +828,12 @@ namespace rocksdb {
 
 		// Increase height with probability 1 in kBranching
 		int height = 1;
+		DEBUG_PRINT(INFO, RnadomHeightstart);
 		while (height < kMaxHeight_ && height < kMaxPossibleHeight &&
 			rnd->Next() < kScaledInverseBranching_) {
 			height++;
 		}
+		DEBUG_PRINT(INFO, RnadomHeightend);
 		assert(height > 0);
 		assert(height <= kMaxHeight_);
 		assert(height <= kMaxPossibleHeight);
@@ -1035,6 +1040,7 @@ namespace rocksdb {
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::AllocateNode_Seq(size_t key_size, int height, uint64_t s ) {
 			int i=0;
+			//printf("H : %d\n", height);
 Allocate:
 		if(free_node_queue[height].size_approx() < 5 || i > 5){
 			auto prefix = sizeof(std::atomic<Node*>) * (height);
@@ -1043,7 +1049,7 @@ Allocate:
 			//height		+1 //delete for memory space	
 	
 			char* raw = allocator_->AllocateAligned(prefix + sizeof(Node) + key_size);
-			printf("allocate : %ld\n",prefix + sizeof(Node) + key_size);
+	//		printf("allocate : %ld\n",prefix + sizeof(Node) + key_size);
 			Node* x = reinterpret_cast<Node*>(raw + prefix);
 			s--;	
 			//x->StashSeq(s);
@@ -1079,8 +1085,7 @@ Allocate:
 				free_node_queue[height].enqueue(x);
 				goto Allocate;
 			}
-			DEBUG_PRINT(INFO, reused_memory);
-			DEBUG_PRINT(DEBUG,"Reused memory");				
+			//DEBUG_PRINT(INFO, reused_memory);
 			free_list_cnt.fetch_sub(1);
 			reused_cnt.fetch_add(1);
 			//free_node->StashSeq(s);
