@@ -58,6 +58,9 @@
 #define INTERNAL_SEQ
 #define NEXT_CHAIN
 //#define TRACE
+
+#define MAX_HEIGHT 64
+#define P_FACTOR 2
 #endif
 namespace rocksdb {
 	template <class Comparator>
@@ -115,8 +118,8 @@ namespace rocksdb {
 		// in the allocator must remain allocated for the lifetime of the
 		// skiplist object.
 		explicit InlineSkipList(Comparator cmp, Allocator* allocator,
-			int32_t max_height = 12,
-			int32_t branching_factor = 4);
+			int32_t max_height = MAX_HEIGHT,
+			int32_t branching_factor = P_FACTOR);
 
 		// Allocates a key and a skip-list node, returning a pointer to the key
 		// portion of the node.  This method is thread-safe if the allocator
