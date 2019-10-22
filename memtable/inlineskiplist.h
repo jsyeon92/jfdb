@@ -62,8 +62,8 @@
 #define TRACE
 #define GC
 #endif
-#define MAX_HEIGHT 65
-#define P_FACTOR 2
+#define MAX_HEIGHT 12
+#define P_FACTOR 4
 #define INFO	2
 #define DEBUG	1
 
