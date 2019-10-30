@@ -57,18 +57,21 @@
 #include <unistd.h> ///sleep
 #define JSYEON
 #define INTERNAL_SEQ
-#define NEXT_CHAIN
+//#define NEXT_CHAIN
 #define TEST
 #define TRACE
 #define GC
 #endif
+#define G_STAMP 20
 #define MAX_HEIGHT 12
 #define P_FACTOR 4
 #define INFO	2
 #define DEBUG	1
 
 #define DEBUGLEVEL 3 
-#define DEBUG_PRINT(level, x) do{ if (level == INFO) printf("%s\n",#x); }while(0);
+#define DEBUG_PRINT(level, x) do{ if (level > DEBUGLEVEL) printf("%s\n",#x); }while(0);
+
+
 
 using namespace moodycamel;
 
@@ -132,40 +135,83 @@ namespace rocksdb {
 			free_node_entry(Node* node , size_t height): node_(node), height_(height){}
 		};
 
-		ConcurrentQueue<free_node_entry> free_node_queue[MAX_HEIGHT];
-
+		ConcurrentQueue<free_node_entry> free_node_queue[MAX_HEIGHT+2];
+		std::atomic<int> flag;
 		void free_node_queue_enqueue_next(Node* node){
-			DEBUG_PRINT(DEBUG, free_node_queue_enqueue_next);
+			if(flag.load() != 0)
+				return;
+			flag.store(1);
+
 			Node* next = nullptr;
 			int i=1;
 			DEBUG_PRINT(DEBUG, latest_chain_key);
 			//PrintKey(node->Key());
+			uint64_t latest_seq = GetSequenceNum(node->Key());
+/*		
 			next = node->GetChain();
-			node->InitChain();
+			//node->InitChain();
 			node = next;
 			next = nullptr;
-			while(node != nullptr){
-				size_t height = node->UnstashHeight();
-				free_node_entry x(node, node->UnstashHeight());
-				next = node->GetChain();
-				if(next == nullptr){//next chain empty
-					DEBUG_PRINT(DEBUG, --next_chain_empty);
-					//PrintKey(node->Key());
-					free_node_queue[height].enqueue(x);
-					node = next;
-					free_list_cnt.fetch_add(i);
-					invalid_cnt.fetch_sub(i);
-					chain_cnt.fetch_sub(i);
-				}else{//next chain push queue
-					DEBUG_PRINT(DEBUG, --next_chain_exist);
-					//PrintKey(node->Key());
+			PrintKey(node->Key());
+*/
+/*		
+			int j=0;
+			while(node != nullptr && j < 10){
+				//j++;
+				uint64_t old_chain_seq = GetSequenceNum(node->Key());
+				if(latest_seq - G_STAMP >= old_chain_seq){	
+					size_t height = node->UnstashHeight();
+					free_node_entry x(node, height);
+					next = node->GetChain();
+					if(next == nullptr){//next chain empty
+						DEBUG_PRINT(DEBUG, --next_chain_empty);
+						PrintKey(node->Key());
+						node->InitChain();
+						free_node_queue[height].enqueue(x);
+						node = next;
+						free_list_cnt.fetch_add(i);
+						invalid_cnt.fetch_sub(i);
+						chain_cnt.fetch_sub(i);
+						break;
+					}else{//next chain push queue
+						DEBUG_PRINT(DEBUG, --next_chain_exist);
+						PrintKey(node->Key());
+						node->InitChain();
+						free_node_queue[height].enqueue(x);
+						node = next;
+						i++;
+					}
+				}else{
+					node = node->GetChain();
+					next = node;
+				}
+			}
+*/
+			next=node->GetChain();
+			while(next != nullptr ){
+				uint64_t old_chain_seq = GetSequenceNum(next->Key());
+				if(latest_seq - G_STAMP >= old_chain_seq){	
+					size_t height = next->UnstashHeight();
+					free_node_entry x(next, height);
 					node->InitChain();
 					free_node_queue[height].enqueue(x);
 					node = next;
-					i++;
+					next = next->GetChain();
+					free_list_cnt.fetch_add(i);
+					invalid_cnt.fetch_sub(i);
+					chain_cnt.fetch_sub(i);
+				}else{
+					node = next;
+					next = next->GetChain();
 				}
-
 			}
+/*
+			if(j == 10){
+				DEBUG_PRINT(DEBUG, InitChain_not_work);
+			}
+*/
+			DEBUG_PRINT(DEBUG, end_free_list);
+			flag.store(0);
 		}
 		
 #if 0
@@ -601,7 +647,14 @@ namespace rocksdb {
 			Node* t = nullptr;
 			memcpy(&next_[-1], &t, sizeof(Node*));
 */
-			next_[0].store(nullptr, std::memory_order_relaxed);
+			//next_[0].store(nullptr, std::memory_order_relaxed);
+			next_[0].store(nullptr, std::memory_order_seq_cst);
+/*
+			while(next_[0].load() != nullptr){
+	
+			}
+*/
+
 		}
 		Node* GetChain() const {
 
@@ -740,6 +793,7 @@ namespace rocksdb {
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Seek_Chain(const char* target) {
 			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+			printf("test\n");
        		if(node_ != nullptr){
 				chain_ = node_->GetChain();//Get level 0 
 			}
@@ -755,6 +809,7 @@ namespace rocksdb {
 */
 #if 1
 			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+			uint64_t c_seq=0;
        		if(node_ != nullptr){
 				chain_ = node_->GetChain();//Get level 0 
 				if (chain_ == nullptr) {
@@ -763,7 +818,7 @@ namespace rocksdb {
 				else {
 					uint64_t seq = GetSequenceNum(target);
 					while(chain_ != nullptr){
-						uint64_t c_seq = GetSequenceNum(chain_->Key());
+						c_seq = GetSequenceNum(chain_->Key());
 //						uint64_t c_seq = chain_->UnstashSeq();
 						if(seq >= c_seq)
 							return ;
@@ -828,12 +883,12 @@ namespace rocksdb {
 
 		// Increase height with probability 1 in kBranching
 		int height = 1;
-		DEBUG_PRINT(INFO, RnadomHeightstart);
+		//DEBUG_PRINT(INFO, RnadomHeightstart);
 		while (height < kMaxHeight_ && height < kMaxPossibleHeight &&
 			rnd->Next() < kScaledInverseBranching_) {
 			height++;
 		}
-		DEBUG_PRINT(INFO, RnadomHeightend);
+		//DEBUG_PRINT(INFO, RnadomHeightend);
 		assert(height > 0);
 		assert(height <= kMaxHeight_);
 		assert(height <= kMaxPossibleHeight);
@@ -1022,6 +1077,7 @@ namespace rocksdb {
 		for (int i = 0; i < kMaxHeight_; ++i) {
 			head_->SetNext(i, nullptr);
 		}
+		flag.store(0);
 		DEBUG_PRINT(DEBUG,CreateInlineSkipList);
 	}
 #ifdef INTERNAL_SEQ
@@ -1042,14 +1098,14 @@ namespace rocksdb {
 			int i=0;
 			//printf("H : %d\n", height);
 Allocate:
-		if(free_node_queue[height].size_approx() < 5 || i > 5){
+		if(free_node_queue[height].size_approx() < 3 || i > 5){
+		//if(1){
 			auto prefix = sizeof(std::atomic<Node*>) * (height);
 			//chain ptr     +1
 			//node sequence +1 //delete for emmory space 
 			//height		+1 //delete for memory space	
 	
 			char* raw = allocator_->AllocateAligned(prefix + sizeof(Node) + key_size);
-	//		printf("allocate : %ld\n",prefix + sizeof(Node) + key_size);
 			Node* x = reinterpret_cast<Node*>(raw + prefix);
 			s--;	
 			//x->StashSeq(s);
@@ -1064,7 +1120,7 @@ Allocate:
 				DEBUG_PRINT(DEBUG,"free_node_dequeue fail");
 				goto Allocate;
 			}
-			DEBUG_PRINT(DEBUG,"Start reallocate memory");
+			//DEBUG_PRINT(DEBUG,"Start reallocate memory");
 			Node* free_node = x.node_;
 /*
 			int free_node_height = x.height_;
@@ -1081,11 +1137,12 @@ Allocate:
 			uint32_t value_size = static_cast<uint32_t>(value.size());
 			free_key_length = VarintLength(key_length) + key_length + VarintLength(value_size) + value_size;
 	
-			if((size_t)free_key_length < key_size){
+			if((size_t)free_key_length != key_size){
 				free_node_queue[height].enqueue(x);
 				goto Allocate;
 			}
-			//DEBUG_PRINT(INFO, reused_memory);
+			DEBUG_PRINT(INFO, reused_memory);
+			//printf("Sequence : %lu\n", (unsigned long)s);
 			free_list_cnt.fetch_sub(1);
 			reused_cnt.fetch_add(1);
 			//free_node->StashSeq(s);
@@ -1338,10 +1395,10 @@ Allocate:
 		if (recompute_height > 0) {
 			RecomputeSpliceLevels(key, splice, recompute_height);
 		}
+		bool splice_is_valid = true;
 #ifndef vc			
 		if (InsertChain_Concurrently(key, splice)) return true;
 #endif
-		bool splice_is_valid = true;
 		if (UseCAS) {
 			for (int i = 0; i < height; ++i) {
 				while (true) {
@@ -1483,7 +1540,6 @@ retry:
 		Node* chain_header = curr->GetChain();//node level 0 
 		Node* update_chain = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 		
-		//uint64_t seq_update = update_chain->UnstashSeq();
 		if (chain_header == nullptr) {
 #if 1
 			if (curr->CASUpdateChain(nullptr, update_chain)) {
@@ -1528,8 +1584,10 @@ retry:
 		else {
 			///chain header
 			Node* prev_chain = chain_header;
+			//uint64_t seq_update = update_chain->UnstashSeq();
+			//uint64_t seq_update = GetSequenceNum(update_chain->Key());
 			//uint64_t seq_prev = GetSequenceNum(prev_chain->Key());
-		//	uint64_t seq_prev = prev_chain->UnstashSeq();
+			//uint64_t seq_prev = prev_chain->UnstashSeq();
 			//next chain node
 			//Node* next_chain = prev_chain->GetChain();
 			update_chain->SetUpdateChain(prev_chain);
@@ -1546,11 +1604,13 @@ retry:
 				DEBUG_PRINT(DEBUG,Insert Chain Retry);
 				goto retry;
 			}
-		
-/*
+/*	
+
 			if (seq_update > seq_prev) {//New node insert chain list where front.[1]
 				update_chain->SetUpdateChain(prev_chain);
 				if (curr->CASUpdateChain(prev_chain, update_chain)) {
+					Chain_Reclaim_impl(update_chain);
+					Print_Stat();
 					return true;
 				}
 				else {
