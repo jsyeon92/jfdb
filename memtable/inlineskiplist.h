@@ -59,8 +59,8 @@
 #define NEXT_CHAIN
 //#define TRACE
 
-#define MAX_HEIGHT 64
-#define P_FACTOR 2
+#define MAX_HEIGHT 12
+#define P_FACTOR 4
 #endif
 namespace rocksdb {
 	template <class Comparator>
