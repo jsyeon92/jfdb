@@ -57,6 +57,7 @@
 #define JSYEON
 #define INTERNAL_SEQ
 #define NEXT_CHAIN
+#define CHAIN_INSERT_OPT
 //#define TRACE
 
 #define MAX_HEIGHT 12
@@ -301,7 +302,9 @@ namespace rocksdb {
 		// Return true if key is greater than the data stored in "n".  Null n
 		// is considered infinite.  n should not be head_.
 		bool KeyIsAfterNode(const char* key, Node* n) const;
-
+#ifdef CHAIN_INSERT_OPT
+		bool KeyIsAfterNode_Equal(const char* key, Node* n, uint64_t* insert_chain) const;
+#endif
 		// Returns the earliest node with a key >= key.
 		// Return nullptr if there is no such node.
 		Node* FindGreaterOrEqual(const char* key) const;
@@ -329,12 +332,21 @@ namespace rocksdb {
 		// point to a node that is before the key, and after should point to
 		// a node that is after the key.  after should be nullptr if a good after
 		// node isn't conveniently available.
+#ifdef CHAIN_INSERT_OPT
+		template<bool prefetch_before>
+		void FindSpliceForLevel_Equal(const char* key, Node* before, Node* after, int level,
+			Node** out_prev, Node** out_next, uint64_t* insert_chain);
+#endif
 		template<bool prefetch_before>
 		void FindSpliceForLevel(const char* key, Node* before, Node* after, int level,
 			Node** out_prev, Node** out_next);
 
 		// Recomputes Splice levels from highest_level (inclusive) down to
 		// lowest_level (inclusive).
+#ifdef CHAIN_INSERT_OPT
+		void RecomputeSpliceLevels_Equal(const char* key, Splice* splice,
+			int recompute_level);
+#endif
 		void RecomputeSpliceLevels(const char* key, Splice* splice,
 			int recompute_level);
 
@@ -356,6 +368,9 @@ namespace rocksdb {
 		int height_ = 0;
 		Node** prev_;
 		Node** next_;
+#ifdef CHAIN_INSERT_OPT
+		uint64_t insert_chain=0;
+#endif
 	};
 
 	// The Node data type is more of a pointer into custom-managed memory than
@@ -568,6 +583,7 @@ namespace rocksdb {
 						else
 							chain_=chain_->GetChain();
 					}
+					printf("SEEK_FAIL\n");
 				}
 			}
 #endif
@@ -635,7 +651,21 @@ namespace rocksdb {
 		assert(height <= kMaxPossibleHeight);
 		return height;
 	}
+#ifdef CHAIN_INSERT_OPT
+	template <class Comparator>
+	bool InlineSkipList<Comparator>::KeyIsAfterNode_Equal(const char* key,
+		Node* n, uint64_t* insert_chain) const {
+		// nullptr n is considered infinite
+		assert(n != head_);
+		int cmp = compare_(n->Key(), key, (uint64_t)1);
+		if(cmp == 0){
+			//printf("INSERT_CHAIN == 1\n");
+			*insert_chain=1;
+		}
+		return (n != nullptr) && cmp < 0;
 
+	}
+#endif
 	template <class Comparator>
 	bool InlineSkipList<Comparator>::KeyIsAfterNode(const char* key,
 		Node* n) const {
@@ -906,7 +936,36 @@ namespace rocksdb {
 		}
 		return Insert<false>(key, splice, true);
 	}
-
+#ifdef CHAIN_INSERT_OPT
+	template <class Comparator>
+	template <bool prefetch_before>
+	void InlineSkipList<Comparator>::FindSpliceForLevel_Equal(const char* key,
+		Node* before, Node* after,
+		int level, Node** out_prev,
+		Node** out_next, uint64_t* insert_chain) {
+		while (true) {
+			Node* next = before->Next(level);
+			if (next != nullptr) {
+				PREFETCH(next->Next(level), 0, 1);
+			}
+			if (prefetch_before == true) {
+				if (next != nullptr && level>0) {
+					PREFETCH(next->Next(level - 1), 0, 1);
+				}
+			}
+			assert(before == head_ || next == nullptr ||
+				KeyIsAfterNode(next->Key(), before));
+			assert(before == head_ || KeyIsAfterNode(key, before));
+			if (next == after || !KeyIsAfterNode_Equal(key, next, insert_chain)) {
+				// found it
+				*out_prev = before;
+				*out_next = next;
+				return;
+			}
+			before = next;
+		}
+	}
+#endif
 	template <class Comparator>
 	template <bool prefetch_before>
 	void InlineSkipList<Comparator>::FindSpliceForLevel(const char* key,
@@ -935,7 +994,23 @@ namespace rocksdb {
 			before = next;
 		}
 	}
-
+#ifdef CHAIN_INSERT_OPT
+	template <class Comparator>
+	void InlineSkipList<Comparator>::RecomputeSpliceLevels_Equal(const char* key,
+		Splice* splice,
+		int recompute_level) {
+		assert(recompute_level > 0);
+		assert(recompute_level <= splice->height_);
+		for (int i = recompute_level - 1; i >= 0; --i) {
+			FindSpliceForLevel_Equal<true>(key, splice->prev_[i + 1], splice->next_[i + 1], i,
+				&splice->prev_[i], &splice->next_[i], &splice->insert_chain);
+		}
+/*
+		if(splice->insert_chain == 1)
+			printf("SPLICE->INSERT_CHAIN == 1 ");
+*/
+	}
+#endif
 	template <class Comparator>
 	void InlineSkipList<Comparator>::RecomputeSpliceLevels(const char* key,
 		Splice* splice,
@@ -947,11 +1022,13 @@ namespace rocksdb {
 				&splice->prev_[i], &splice->next_[i]);
 		}
 	}
-
 	template <class Comparator>
 	template <bool UseCAS>
 	bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
 		bool allow_partial_splice_fix) {
+#ifdef CHAIN_INSERT_OPT
+		splice->insert_chain=0;
+#endif
 		Node* x = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 		int height = x->UnstashHeight();
 		assert(height >= 1 && height <= kMaxHeight_);
@@ -1056,10 +1133,16 @@ namespace rocksdb {
 		}
 		assert(recompute_height <= max_height);
 		if (recompute_height > 0) {
+#ifdef CHAIN_INSERT_OPT
+			RecomputeSpliceLevels_Equal(key, splice, recompute_height);
+#else
 			RecomputeSpliceLevels(key, splice, recompute_height);
+#endif
 		}
-#ifndef vc			
-		if (InsertChain_Concurrently(key, splice)) return true;
+#ifndef vc
+		if(splice->insert_chain){
+			if (InsertChain_Concurrently(key, splice)) return true;
+		}
 #endif
 		bool splice_is_valid = true;
 		if (UseCAS) {
@@ -1171,14 +1254,19 @@ namespace rocksdb {
 #ifndef vc
 	template <class Comparator>
 	bool InlineSkipList<Comparator>::InsertChain_Concurrently(const char * key, const Splice* splice) {
-			
+//		Node* curr = splice->next_[0];
+
+		Node* curr = splice->next_[0];
+		if(curr == nullptr)
+			return false;
+/*
 		Node* curr;
 		Node* next = splice->next_[0];
-		
 		if(next != nullptr &&  compare_(key, next->Key(),1)==0)
 			curr=next;
 		else
 			return false;
+*/
 #ifdef TRACE
 		chain_cnt.fetch_add(1);	
 #endif
