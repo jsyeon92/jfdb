@@ -1096,14 +1096,10 @@ namespace rocksdb {
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::AllocateNode_Seq(size_t key_size, int height, uint64_t s ) {
 			int i=0;
-			//printf("H : %d\n", height);
 Allocate:
-		if(free_node_queue[height].size_approx() < 3 || i > 5){
-		//if(1){
+		if(free_node_queue[height].size_approx() < 3 || i > 3){
 			auto prefix = sizeof(std::atomic<Node*>) * (height);
 			//chain ptr     +1
-			//node sequence +1 //delete for emmory space 
-			//height		+1 //delete for memory space	
 	
 			char* raw = allocator_->AllocateAligned(prefix + sizeof(Node) + key_size);
 			Node* x = reinterpret_cast<Node*>(raw + prefix);
@@ -1121,14 +1117,8 @@ Allocate:
 				goto Allocate;
 			}
 			//DEBUG_PRINT(DEBUG,"Start reallocate memory");
+			
 			Node* free_node = x.node_;
-/*
-			int free_node_height = x.height_;
-			if(free_node_height < height){
-				free_node_queue.enqueue(x);
-				goto Allocate;
-			}
-*/
 			int64_t free_key_length = 0;
 			uint32_t key_length = 0;
 			const char* key = free_node->Key();
