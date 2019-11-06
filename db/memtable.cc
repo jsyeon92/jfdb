@@ -474,8 +474,7 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
   char* buf = nullptr;
   std::unique_ptr<MemTableRep>& table =
       type == kTypeRangeDeletion ? range_del_table_ : table_;
-  KeyHandle handle = table->Allocate_Seq(encoded_len, &buf, (uint64_t )s);
-//  KeyHandle handle = table->Allocate(encoded_len, &buf);
+  KeyHandle handle = table->Allocate(encoded_len, &buf);
 
   char* p = EncodeVarint32(buf, internal_key_size);
   memcpy(p, key.data(), key_size);
