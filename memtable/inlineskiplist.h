@@ -56,7 +56,7 @@
 #include <unistd.h> ///sleep
 #define JSYEON
 #define INTERNAL_SEQ
-#define NEXT_CHAIN
+//#define NEXT_CHAIN
 //#define TRACE
 
 #define MAX_HEIGHT 12
@@ -396,22 +396,12 @@ namespace rocksdb {
 		}
 #ifndef vc
 		void InitChain(){
-/*
 			Node* t = nullptr;
 			memcpy(&next_[-1], &t, sizeof(Node*));
-*/
-			next_[-1].store(nullptr);
 		}
 		Node* GetChain() const {
-/*
 			Node* rv = nullptr;
 			memcpy(&rv, &next_[-1], sizeof(Node *));
-			return rv;
-*/
-			//return next_[-1].load(std::memory_order_acquire);
-			return next_[-1].load(std::memory_order_release);
-			//return next_[-1].load();
-			
 		}
 		void SetUpdateChain(Node* x) {
 			next_[-1].store(x, std::memory_order_release);
@@ -420,7 +410,6 @@ namespace rocksdb {
 			return next_[-1].compare_exchange_strong(expected, x);
 		}
 #endif
-
 		const char* Key() const { return reinterpret_cast<const char*>(&next_[1]); }
 
 		// Accessors/mutators for links.  Wrapped in methods so we can add
@@ -546,13 +535,6 @@ namespace rocksdb {
 #endif
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Seek(const char* target) {
-/*
-			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
-       		if(node_ != nullptr){
-				chain_ = node_->GetChain();//Get level 0 
-			}
-*/
-#if 1
 			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
        		if(node_ != nullptr){
 				chain_ = node_->GetChain();//Get level 0 
@@ -570,7 +552,6 @@ namespace rocksdb {
 					}
 				}
 			}
-#endif
 	}
 
 	template <class Comparator>
