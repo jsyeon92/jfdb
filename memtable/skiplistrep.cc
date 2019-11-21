@@ -27,7 +27,7 @@ public:
        transform_(transform),
        lookahead_(lookahead) {}
 
-#ifdef INTERNAL_SEQ
+#ifdef JELLYFISH
   virtual KeyHandle Allocate_Seq(const size_t len, char**buf, uint64_t s){
   *buf = skip_list_.AllocateKey_Seq(len,s);
    return static_cast<KeyHandle>(*buf);
