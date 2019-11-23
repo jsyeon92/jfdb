@@ -223,14 +223,15 @@ void MemTable::UpdateOldestKeyTime() {
 int MemTable::KeyComparator::operator()(const char* prefix_len_key1,
                                         const char* prefix_len_key2) const {
   // Internal keys are encoded as length-prefixed strings.
+  //printf("Compare 1\n");
   Slice k1 = GetLengthPrefixedSlice(prefix_len_key1);
   Slice k2 = GetLengthPrefixedSlice(prefix_len_key2);
   return comparator.CompareKeySeq(k1, k2);
 }
 
 int MemTable::KeyComparator::operator()(const char* prefix_len_key,
-                                        const KeyComparator::DecodedType& key)
-    const {
+                                        const KeyComparator::DecodedType& key) const {
+  printf("Compare 2\n");
   // Internal keys are encoded as length-prefixed strings.
   Slice a = GetLengthPrefixedSlice(prefix_len_key);
   return comparator.CompareKeySeq(a, key);
@@ -238,12 +239,23 @@ int MemTable::KeyComparator::operator()(const char* prefix_len_key,
 #ifdef JELLY_SEARCH
 int MemTable::KeyComparator::operator()(const char* prefix_len_key1,
                                         const char* prefix_len_key2, uint64_t tmp) const {
+  //printf("Compare 3\n");
   // Internal keys are encoded as length-prefixed strings.
   Slice k1 = GetLengthPrefixedSlice(prefix_len_key1);
   Slice k2 = GetLengthPrefixedSlice(prefix_len_key2);
-  tmp +=1;
+  tmp = tmp << 1;
   return comparator.CompareKeySeq_Jelly(k1, k2);
 }
+int MemTable::KeyComparator::operator()(const char* prefix_len_key,
+                                        const KeyComparator::DecodedType& key, uint64_t tmp) const{
+
+  printf("Compare 4\n");
+  // Internal keys are encoded as length-prefixed strings.
+  Slice a = GetLengthPrefixedSlice(prefix_len_key);
+  tmp=tmp << 1;
+  return comparator.CompareKeySeq_Jelly(a, key);
+}
+
 #endif
 void MemTableRep::InsertConcurrently(KeyHandle /*handle*/) {
 #ifndef ROCKSDB_LITE

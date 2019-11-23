@@ -49,15 +49,15 @@
 #include "port/port.h"
 #include "util/allocator.h"
 #include "util/random.h"
-
-
-#define JELLYFISH
-#ifdef JELLYFISH
+#ifndef vc
 #include "util/coding.h"
 #include <mutex>
 #include <cstdint>
 #include <unistd.h> ///sleep
-#define NEXT_CHAIN1
+#define JSYEON
+#define INTERNAL_SEQ
+#define NEXT_CHAIN
+#define CHAIN_INSERT_OPT
 //#define TRACE
 
 #define MAX_HEIGHT 12
@@ -72,7 +72,7 @@ namespace rocksdb {
 
 	public:
 		static const uint16_t kMaxPossibleHeight = 32;
-#ifdef JELLYFISH
+#ifndef vc
 		inline void PrintKey(const char* ikey) const
 		{
 			if (ikey != nullptr) {
@@ -125,9 +125,10 @@ namespace rocksdb {
 		// Allocates a key and a skip-list node, returning a pointer to the key
 		// portion of the node.  This method is thread-safe if the allocator
 		// is thread-safe.
-#ifdef JELLYFISH
+#ifdef INTERNAL_SEQ
 		char* AllocateKey_Seq(size_t key_size, uint64_t s);
 #endif
+
 		char* AllocateKey(size_t key_size);
 
 		// Allocate a splice using allocator.
@@ -138,9 +139,13 @@ namespace rocksdb {
 		//
 		// REQUIRES: nothing that compares equal to key is currently in the list.
 		// REQUIRES: no concurrent calls to any of inserts.
+#ifndef vc
+		bool Insert_s(const char* key, uint64_t sequence);
+#endif
 		bool Insert(const char* key);
 
-#ifdef JELLYFISH
+#ifndef vc
+		bool InsertChain(const char* key, const Splice* splice);
 		bool InsertChain_Concurrently(const char* key, const Splice* splice, int fl);
 #endif
 
@@ -157,6 +162,9 @@ namespace rocksdb {
 		bool InsertWithHint(const char* key, void** hint);
 
 		// Like Insert, but external synchronization is not required.
+#ifndef vc
+		bool InsertConcurrently_s(const char* key, uint64_t sequence);
+#endif
 		bool InsertConcurrently(const char* key);
 
 		// Inserts a node into the skip list.  key must have been allocated by
@@ -174,6 +182,10 @@ namespace rocksdb {
 		// inserted immediately after the splice.  allow_partial_splice_fix ==
 		// false has worse running time for the non-sequential case O(log N),
 		// but a better constant factor.
+#ifndef vc
+		template <bool UseCAS>
+		bool Insert_s(const char* key, Splice* splice, bool allow_partial_splice_fix, uint64_t sequence);
+#endif
 		template <bool UseCAS>
 		bool Insert(const char* key, Splice* splice, bool allow_partial_splice_fix);
 
@@ -233,7 +245,8 @@ namespace rocksdb {
 		private:
 			const InlineSkipList* list_;
 			Node* node_;
-#ifdef JELLYFISH
+			// Intentionally copyable
+#ifndef vc
 			Node* chain_;
 #endif
 		};
@@ -265,9 +278,10 @@ namespace rocksdb {
 		}
 
 		int RandomHeight();
-#ifdef JELLYFISH
+#ifdef INTERNAL_SEQ
 		Node* AllocateNode_Seq(size_t key_size, int height, uint64_t s);
 #endif
+
 		Node* AllocateNode(size_t key_size, int height);
 
 		bool Equal(const char* a, const char* b) const {
@@ -277,7 +291,7 @@ namespace rocksdb {
 		bool LessThan(const char* a, const char* b) const {
 			return (compare_(a, b) < 0);
 		}
-#ifdef JELLYFISH
+#ifndef vc
 		static inline uint64_t GetSequenceNum(const char* internal_key) {
 			Slice akey = GetLengthPrefixedSlice(internal_key);
 			const uint64_t anum = DecodeFixed64(akey.data() + akey.size() - 8) >> 8;
@@ -288,9 +302,8 @@ namespace rocksdb {
 		// Return true if key is greater than the data stored in "n".  Null n
 		// is considered infinite.  n should not be head_.
 		bool KeyIsAfterNode(const char* key, Node* n) const;
-
-#ifdef JELLYFISH
-		bool KeyIsAfterNode_Equal(const char* key, Node* n, int* insert_chain) const;
+#ifdef CHAIN_INSERT_OPT
+		bool KeyIsAfterNode_Equal(const char* key, Node* n, uint64_t* insert_chain) const;
 #endif
 		// Returns the earliest node with a key >= key.
 		// Return nullptr if there is no such node.
@@ -319,10 +332,10 @@ namespace rocksdb {
 		// point to a node that is before the key, and after should point to
 		// a node that is after the key.  after should be nullptr if a good after
 		// node isn't conveniently available.
-#ifdef JELLYFISH
+#ifdef CHAIN_INSERT_OPT
 		template<bool prefetch_before>
 		void FindSpliceForLevel_Equal(const char* key, Node* before, Node* after, int level,
-			Node** out_prev, Node** out_next, int* insert_chain);
+			Node** out_prev, Node** out_next, uint64_t* insert_chain);
 #endif
 		template<bool prefetch_before>
 		void FindSpliceForLevel(const char* key, Node* before, Node* after, int level,
@@ -330,7 +343,7 @@ namespace rocksdb {
 
 		// Recomputes Splice levels from highest_level (inclusive) down to
 		// lowest_level (inclusive).
-#ifdef JELLYFISH
+#ifdef CHAIN_INSERT_OPT
 		int RecomputeSpliceLevels_Equal(const char* key, Splice* splice,
 			int recompute_level);
 #endif
@@ -355,6 +368,9 @@ namespace rocksdb {
 		int height_ = 0;
 		Node** prev_;
 		Node** next_;
+#ifdef CHAIN_INSERT_OPT
+		uint64_t insert_chain=0;
+#endif
 	};
 
 	// The Node data type is more of a pointer into custom-managed memory than
@@ -364,15 +380,14 @@ namespace rocksdb {
 	// any pointer or sizing data, which reduces per-node memory overheads.
 	template <class Comparator>
 	struct InlineSkipList<Comparator>::Node {
-#ifdef JELLYFISH	
+#ifdef INTERNAL_SEQ	
 		void StashSeq(const uint64_t s){
 			assert(s >= 0);
 			memcpy(&next_[0], &s, sizeof(uint64_t));
 		}
 
 		uint64_t UnstashSeq(){
-/*
-			uint64_t s;
+/*			uint64_t s;
 			memcpy(&s, &next_[0], sizeof(uint64_t));
 			assert(s >= 0);
 			return s;
@@ -394,7 +409,7 @@ namespace rocksdb {
 			memcpy(&rv, &next_[-2], sizeof(int));
 			return rv;
 		}
-#ifdef JELLYFISH
+#ifndef vc
 		void InitChain(){
 /*
 			Node* t = nullptr;
@@ -481,9 +496,7 @@ namespace rocksdb {
 		const InlineSkipList* list) {
 		list_ = list;
 		node_ = nullptr;
-#ifdef JELLYFISH
 		chain_ = nullptr;
-#endif
 	}
 
 	template <class Comparator>
@@ -548,7 +561,12 @@ namespace rocksdb {
 #endif
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Seek(const char* target) {
-#if 1
+#if 0
+			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+       		if(node_ != nullptr){
+				chain_ = node_->GetChain();//Get level 0 
+			}
+#else
 			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
        		if(node_ != nullptr){
 				chain_ = node_->GetChain();//Get level 0 
@@ -632,14 +650,15 @@ namespace rocksdb {
 		assert(height <= kMaxPossibleHeight);
 		return height;
 	}
-#ifdef JELLYFISH
+#ifdef CHAIN_INSERT_OPT
 	template <class Comparator>
 	bool InlineSkipList<Comparator>::KeyIsAfterNode_Equal(const char* key,
-		Node* n, int* insert_chain) const {
+		Node* n, uint64_t* insert_chain) const {
 		// nullptr n is considered infinite
 		assert(n != head_);
 		int cmp = compare_(n->Key(), key, (uint64_t)1);
 		if(cmp == 0){
+			//printf("INSERT_CHAIN == 1\n");
 			*insert_chain=1;
 		}
 		return (n != nullptr) && cmp < 0;
@@ -815,7 +834,7 @@ namespace rocksdb {
 			head_->SetNext(i, nullptr);
 		}
 	}
-#ifdef JELLYFISH
+#ifdef INTERNAL_SEQ
 	template <class Comparator>
 	char* InlineSkipList<Comparator>::AllocateKey_Seq(size_t key_size, uint64_t s) {
 		return const_cast<char*>(AllocateNode_Seq(key_size, RandomHeight(),s)->Key());
@@ -826,7 +845,7 @@ namespace rocksdb {
 	char* InlineSkipList<Comparator>::AllocateKey(size_t key_size) {
 		return const_cast<char*>(AllocateNode(key_size, RandomHeight())->Key());
 	}
-#ifdef JELLYFISH
+#ifdef INTERNAL_SEQ
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::AllocateNode_Seq(size_t key_size, int height, uint64_t s ) {
@@ -893,6 +912,13 @@ namespace rocksdb {
 	}
 	template <class Comparator>
 	bool InlineSkipList<Comparator>::Insert(const char* key) {
+#if 0
+		Node* prev[kMaxPossibleHeight];
+		Node* next[kMaxPossibleHeight];
+		Splice splice;
+		splice.prev_ = prev;
+		splice.next_ = next;
+#endif
 		return Insert<false>(key, seq_splice_, false);
 	}
 
@@ -916,13 +942,13 @@ namespace rocksdb {
 		}
 		return Insert<false>(key, splice, true);
 	}
-#ifdef JELLYFISH
+#ifdef CHAIN_INSERT_OPT
 	template <class Comparator>
 	template <bool prefetch_before>
 	void InlineSkipList<Comparator>::FindSpliceForLevel_Equal(const char* key,
 		Node* before, Node* after,
 		int level, Node** out_prev,
-		Node** out_next, int* insert_chain) {
+		Node** out_next, uint64_t* insert_chain) {
 		while (true) {
 			Node* next = before->Next(level);
 			if (next != nullptr) {
@@ -974,25 +1000,22 @@ namespace rocksdb {
 			before = next;
 		}
 	}
-#ifdef JELLYFISH
+#ifdef CHAIN_INSERT_OPT
 	template <class Comparator>
 	int InlineSkipList<Comparator>::RecomputeSpliceLevels_Equal(const char* key,
 		Splice* splice,
 		int recompute_level) {
-
 		assert(recompute_level > 0);
 		assert(recompute_level <= splice->height_);
-
-		int insert_chain = 0;
-
-		for (int i = recompute_level - 1; i >= 0; --i) {
+		int i=0;
+		for (i = recompute_level - 1; i >= 0; --i) {
 			FindSpliceForLevel_Equal<true>(key, splice->prev_[i + 1], splice->next_[i + 1], i,
-				&splice->prev_[i], &splice->next_[i], &insert_chain);
+				&splice->prev_[i], &splice->next_[i], &splice->insert_chain);
 
-			// found the key in this level 
-			if(insert_chain == 1){
-				return i;
-			}
+				if(splice->insert_chain ){
+					return i;
+				}
+
 		}
 		return -1;
 	}
@@ -1012,6 +1035,9 @@ namespace rocksdb {
 	template <bool UseCAS>
 	bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
 		bool allow_partial_splice_fix) {
+#ifdef CHAIN_INSERT_OPT
+		splice->insert_chain=0;
+#endif
 		Node* x = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 		int height = x->UnstashHeight();
 		assert(height >= 1 && height <= kMaxHeight_);
@@ -1115,21 +1141,26 @@ namespace rocksdb {
 			}
 		}
 		assert(recompute_height <= max_height);
-		int fl=-1;
+		int rv=-1;
+		bool splice_is_valid = true;
 		if (recompute_height > 0) {
-#ifdef JELLYFISH
-			fl = RecomputeSpliceLevels_Equal(key, splice, recompute_height);
+#ifdef CHAIN_INSERT_OPT
+			rv=RecomputeSpliceLevels_Equal(key, splice, recompute_height);
 #else
 			RecomputeSpliceLevels(key, splice, recompute_height);
 #endif
 		}
-
-#ifdef JELLYFISH
-		if(fl >= 0){
-			if (InsertChain_Concurrently(key, splice, fl)) return true;
+#ifndef vc
+		if(splice->insert_chain){
+			if (InsertChain_Concurrently(key, splice, rv)){
+				splice->height_=0;		
+				return true;
+			}else{
+				RecomputeSpliceLevels(key, splice, recompute_height);
+				printf("Fail to Insert chain\n");
+			}
 		}
 #endif
-		bool splice_is_valid = true;
 		if (UseCAS) {
 			for (int i = 0; i < height; ++i) {
 				while (true) {
@@ -1148,6 +1179,11 @@ namespace rocksdb {
 						compare_(x->Key(), splice->next_[i]->Key()) < 0);
 					assert(splice->prev_[i] == head_ ||
 						compare_(splice->prev_[i]->Key(), x->Key()) < 0);
+#if 0
+#ifndef vc
+					if (InsertChain_Concurrently(key, splice)) return true;
+#endif
+#endif
 					x->NoBarrier_SetNext(i, splice->next_[i]);
 					if (splice->prev_[i]->CASNext(i, splice->next_[i], x)) {
 						// success
@@ -1193,6 +1229,11 @@ namespace rocksdb {
 				assert(splice->prev_[i] == head_ ||
 					compare_(splice->prev_[i]->Key(), x->Key()) < 0);
 				assert(splice->prev_[i]->Next(i) == splice->next_[i]);
+#if 0
+#ifndef vc
+				if (InsertChain(key, splice)) return true;
+#endif
+#endif
 				x->NoBarrier_SetNext(i, splice->next_[i]);
 				splice->prev_[i]->SetNext(i, x);
 			}
@@ -1226,17 +1267,30 @@ namespace rocksdb {
 		}
 		return true;
 	}
-#ifdef JELLYFISH
+#ifndef vc
 	template <class Comparator>
 	bool InlineSkipList<Comparator>::InsertChain_Concurrently(const char * key, const Splice* splice, int fl) {
-
 		Node* curr = splice->next_[fl];
+
+		if(compare_(curr->Key(), key,1) != 0){
+			printf("JSYEON InsertChain Error assert\n");
+			return false;
+		}
+/*
+		Node* curr;
+		Node* next = splice->next_[0];
+		if(next != nullptr &&  compare_(key, next->Key(),1)==0)
+			curr=next;
+		else
+			return false;
+*/
 #ifdef TRACE
 		chain_cnt.fetch_add(1);	
 #endif
-retry:
-		Node* chain_header = curr->GetChain();//node level 0 
 		Node* nnode = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
+		Node* chain_header;
+retry:
+		chain_header = curr->GetChain();//node level 0 
 
 		//uint64_t seq_update = update_chain->UnstashSeq();
 		if (chain_header == nullptr) {
@@ -1289,6 +1343,7 @@ retry:
 				return true;
 			}
 			else {
+				nnode->InitChain();
 				goto retry;
 			}
 		
@@ -1335,6 +1390,99 @@ retry:
 				}//end while
 			}
 */
+		}
+		printf("value chain fail\n");
+		return false;
+	}
+
+	template <class Comparator>
+	bool InlineSkipList<Comparator>::InsertChain(const char * key, const Splice* splice) {
+					
+		Node* curr ;
+		Node* next = splice->next_[0];
+		
+		if(next != nullptr &&  compare_(key, next->Key(),1)==0)
+			curr=next;
+		else
+			return false;
+#ifdef TRACE
+		chain_cnt.fetch_add(1);
+#endif
+		Node* chain_header = curr->GetChain();//node level 0 
+		Node* update_chain = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
+
+		uint64_t seq_update = update_chain->UnstashSeq();
+
+		if (chain_header == nullptr) {
+#if 1
+			curr->SetUpdateChain(update_chain);	
+			return true;
+#else
+			uint64_t seq_curr = curr->UnstashSeq();
+			const char* key_curr = curr->Key();//current->key
+			uint32_t key_size = 0;
+			const char* key_ptr = GetVarint32Ptr(key_curr, key_curr + 5, &key_size);
+			Slice value = GetLengthPrefixedSlice(key_ptr + key_size);
+			uint32_t val_size = static_cast<uint32_t>(value.size());
+			uint32_t internal_key_size = key_size + 8;
+			const uint32_t encoded_len = VarintLength(internal_key_size) + internal_key_size + VarintLength(val_size) + val_size;
+			Node* Header = AllocateNode_Seq(encoded_len, 1, seq_curr);
+			char* headerkey = const_cast<char*>(Header->Key());
+			memcpy(headerkey, key_curr, encoded_len);
+
+			if (seq_update > seq_curr) {//[1]
+				update_chain->SetUpdateChain(Header);
+				if (curr->CASUpdateChain(nullptr, update_chain)) {
+					return true;
+				}
+			}
+			else {// [2]
+				Header->SetUpdateChain(update_chain);
+				if (curr->CASUpdateChain(nullptr, Header)) {
+					return true;
+				}
+			}
+#endif
+		}
+		else {
+			///chain header
+			Node* prev_chain = chain_header;
+			uint64_t seq_prev = prev_chain->UnstashSeq();
+			//next chain node
+			Node* next_chain = prev_chain->GetChain();
+			if (seq_update > seq_prev) {//New node insert chain list where front.[1]
+				update_chain->SetUpdateChain(prev_chain);
+				curr->SetUpdateChain(update_chain);
+				return true;
+			}
+			else {/// New node insert chain list where another.
+				  //check next chain node if null
+				while (true) {
+					if (next_chain == nullptr) {//[2]
+						prev_chain->SetUpdateChain(update_chain);
+						return true;
+					}
+					else {
+						uint64_t seq_next = GetSequenceNum(next_chain->Key());
+						if (seq_update > seq_next) {//[3]
+							update_chain->SetUpdateChain(next_chain);
+							prev_chain->SetUpdateChain(update_chain);	
+							return true;
+						}
+						else {//[4] go to while first
+							prev_chain = next_chain;
+							Node* tmp_chain = next_chain->GetChain();
+							//printf("case4\n");
+							if (tmp_chain != nullptr) {
+								next_chain = next_chain;
+							}
+							else {
+								next_chain = nullptr;
+							}
+						}
+					}
+				}//end while
+			}
 		}
 		printf("value chain fail\n");
 		return false;

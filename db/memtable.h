@@ -82,8 +82,8 @@ class MemTable {
     const InternalKeyComparator comparator;
     explicit KeyComparator(const InternalKeyComparator& c) : comparator(c) { }
 #ifdef JELLY_SEARCH
-   virtual int operator()(const char* prefix_len_key1,
-                           const char* prefix_len_key2, uint64_t tmp) const;
+   virtual int operator()(const char* prefix_len_key1, const char* prefix_len_key2, uint64_t tmp) const;
+   virtual int operator()(const char* prefix_len_key,  const DecodedType& key, uint64_t tmp) const;
 #endif
     virtual int operator()(const char* prefix_len_key1,
                            const char* prefix_len_key2) const override;

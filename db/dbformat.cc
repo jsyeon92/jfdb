@@ -114,6 +114,7 @@ int InternalKeyComparator::Compare(const ParsedInternalKey& a,
   //    increasing user key (according to user-supplied comparator)
   //    decreasing sequence number
   //    decreasing type (though sequence# should be enough to disambiguate)
+  printf("COMPARE!!\n");
   int r = user_comparator_->Compare(a.user_key, b.user_key);
   PERF_COUNTER_ADD(user_key_comparison_count, 1);
   if (r == 0) {
