@@ -1130,9 +1130,6 @@ namespace rocksdb {
 			if (InsertChain_Concurrently(key, splice, rv)){
 				splice->height_=0;		
 				return true;
-			}else{
-				RecomputeSpliceLevels(key, splice, recompute_height);
-				printf("Fail to Insert chain\n");
 			}
 		}
 #endif
