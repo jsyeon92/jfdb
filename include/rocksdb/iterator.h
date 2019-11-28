@@ -23,7 +23,7 @@
 #include "rocksdb/cleanable.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
-
+#define JELLYFISH
 namespace rocksdb {
 
 class Iterator : public Cleanable {
@@ -61,7 +61,9 @@ class Iterator : public Cleanable {
   // true iff the iterator was not positioned at the last entry in the source.
   // REQUIRES: Valid()
   virtual void Next() = 0;
-
+ #ifdef JELLYFISH
+  virtual void NextChain() { Next(); }
+ #endif
   // Moves to the previous entry in the source.  After this call, Valid() is
   // true iff the iterator was not positioned at the first entry in source.
   // REQUIRES: Valid()

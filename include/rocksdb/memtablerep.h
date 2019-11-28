@@ -40,7 +40,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <rocksdb/slice.h>
-#define JELLY_SEARCH
+#define JELLYFISH
 namespace rocksdb {
 
 class Arena;
@@ -69,7 +69,7 @@ class MemTableRep {
 
     // Compare a and b. Return a negative value if a is less than b, 0 if they
     // are equal, and a positive value if a is greater than b
-#ifdef JELLY_SEARCH
+#ifdef JELLYFISH
 	virtual int operator()(const char* prefix_len_key1,
 						   const char* prefix_len_key2, uint64_t tmp)const=0;
 #endif
@@ -89,7 +89,6 @@ class MemTableRep {
   // better. By allowing it to allocate memory, it can possibly put
   // correlated stuff in consecutive memory area to make processor
   // prefetching more efficient.
-  virtual KeyHandle Allocate_Seq(const size_t len, char** buf, uint64_t s);
   virtual KeyHandle Allocate(const size_t len, char** buf);
 
   // Insert key into the collection. (The caller will pack key and value into a
@@ -193,7 +192,9 @@ class MemTableRep {
     // Advances to the next position.
     // REQUIRES: Valid()
     virtual void Next() = 0;
-
+#ifdef JELLYFISH
+    virtual void NextChain() { Next(); }
+#endif
     // Advances to the previous position.
     // REQUIRES: Valid()
     virtual void Prev() = 0;

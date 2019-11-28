@@ -11,6 +11,8 @@
 #include "rocksdb/iterator.h"
 #include "rocksdb/status.h"
 
+
+
 namespace rocksdb {
 
 class PinnedIteratorsManager;
@@ -45,7 +47,9 @@ class InternalIterator : public Cleanable {
   // The iterator is Valid() after this call iff the source contains
   // an entry that comes at or before target.
   virtual void SeekForPrev(const Slice& target) = 0;
-
+  #ifdef JELLYFISH
+  virtual void NextChain() { Next(); }
+  #endif
   // Moves to the next entry in the source.  After this call, Valid() is
   // true iff the iterator was not positioned at the last entry in the source.
   // REQUIRES: Valid()

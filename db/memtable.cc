@@ -274,11 +274,7 @@ KeyHandle MemTableRep::Allocate(const size_t len, char** buf) {
   *buf = allocator_->Allocate(len);
   return static_cast<KeyHandle>(*buf);
 }
-KeyHandle MemTableRep::Allocate_Seq(const size_t len, char** buf, uint64_t s) {
-  s=s << 1;
-  *buf = allocator_->Allocate(len);
-  return static_cast<KeyHandle>(*buf);
-}
+
 // Encode a suitable internal key target for "target" and return it.
 // Uses *scratch as scratch space, and the returned pointer will point
 // into this scratch space.
@@ -378,6 +374,14 @@ class MemTableIterator : public InternalIterator {
     iter_->SeekToLast();
     valid_ = iter_->Valid();
   }
+#ifdef JELLYFISH
+  virtual void NextChain() override {
+    PERF_COUNTER_ADD(next_on_memtable_count, 1);
+    assert(Valid());
+    iter_->NextChain();
+    valid_ = iter_->Valid();
+  }
+#endif
   virtual void Next() override {
     PERF_COUNTER_ADD(next_on_memtable_count, 1);
     assert(Valid());
@@ -486,8 +490,7 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
   char* buf = nullptr;
   std::unique_ptr<MemTableRep>& table =
       type == kTypeRangeDeletion ? range_del_table_ : table_;
-  KeyHandle handle = table->Allocate_Seq(encoded_len, &buf, (uint64_t )s);
-//  KeyHandle handle = table->Allocate(encoded_len, &buf);
+  KeyHandle handle = table->Allocate(encoded_len, &buf);
 
   char* p = EncodeVarint32(buf, internal_key_size);
   memcpy(p, key.data(), key_size);

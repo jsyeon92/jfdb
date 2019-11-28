@@ -27,12 +27,6 @@ public:
        transform_(transform),
        lookahead_(lookahead) {}
 
-#ifdef JELLYFISH
-  virtual KeyHandle Allocate_Seq(const size_t len, char**buf, uint64_t s){
-  *buf = skip_list_.AllocateKey_Seq(len,s);
-   return static_cast<KeyHandle>(*buf);
-  }
-#endif
 
  virtual KeyHandle Allocate(const size_t len, char** buf) override {
    *buf = skip_list_.AllocateKey(len);
@@ -82,7 +76,7 @@ public:
     Slice dummy_slice;
     for (iter.Seek_Chain(dummy_slice, k.memtable_key().data());
          iter.Valid() && callback_func(callback_args, iter.key());
-         iter.Next_Chain()) {
+         iter.NextChain()) {
     }
   }
 #else
@@ -133,8 +127,8 @@ public:
       return iter_.key();
     }
 #ifdef NEXT_CHAIN
-	virtual void Next_Chain() {
-		iter_.Next_Chain();
+	virtual void NextChain() {
+		iter_.NextChain();
 	}
 #endif
     // Advances to the next position.

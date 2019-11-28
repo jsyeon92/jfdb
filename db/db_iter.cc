@@ -8,9 +8,9 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #include "db/db_iter.h"
-#include <string>
 #include <iostream>
 #include <limits>
+#include <string>
 
 #include "db/dbformat.h"
 #include "db/merge_context.h"
@@ -48,7 +48,7 @@ static void DumpInternalIter(Iterator* iter) {
 // combines multiple entries for the same userkey found in the DB
 // representation into a single entry while accounting for sequence
 // numbers, deletion markers, overwrites, etc.
-class DBIter final: public Iterator {
+class DBIter final : public Iterator {
  public:
   // The following is grossly complicated. TODO: clean it up
   // Which direction is the iterator currently moving?
@@ -61,10 +61,7 @@ class DBIter final: public Iterator {
   //        this->key().
   // (2) When moving backwards, the internal iterator is positioned
   //     just before all entries whose user key == this->key().
-  enum Direction {
-    kForward,
-    kReverse
-  };
+  enum Direction { kForward, kReverse };
 
   // LocalStatistics contain Statistics counters that will be aggregated per
   // each iterator instance and then will be sent to the global statistics when
@@ -176,12 +173,11 @@ class DBIter final: public Iterator {
   virtual bool Valid() const override { return valid_; }
   virtual Slice key() const override {
     assert(valid_);
-    if(start_seqnum_ > 0) {
+    if (start_seqnum_ > 0) {
       return saved_key_.GetInternalKey();
     } else {
       return saved_key_.GetUserKey();
     }
-
   }
   virtual Slice value() const override {
     assert(valid_);
@@ -469,14 +465,14 @@ bool DBIter::FindNextUserEntryInternal(bool skipping, bool prefix_check) {
             // 2) return ikey only if ikey.seqnum >= start_seqnum_
             // note that if deletion seqnum is < start_seqnum_ we
             // just skip it like in normal iterator.
-            if (start_seqnum_ > 0 && ikey_.sequence >= start_seqnum_)  {
+            if (start_seqnum_ > 0 && ikey_.sequence >= start_seqnum_) {
               saved_key_.SetInternalKey(ikey_);
               valid_ = true;
               return true;
             } else {
               saved_key_.SetUserKey(
-                ikey_.user_key,
-                !pin_thru_lifetime_ || !iter_->IsKeyPinned() /* copy */);
+                  ikey_.user_key,
+                  !pin_thru_lifetime_ || !iter_->IsKeyPinned() /* copy */);
               skipping = true;
               PERF_COUNTER_ADD(internal_delete_skipped_count, 1);
             }
@@ -486,9 +482,7 @@ bool DBIter::FindNextUserEntryInternal(bool skipping, bool prefix_check) {
             if (start_seqnum_ > 0) {
               // we are taking incremental snapshot here
               // incremental snapshots aren't supported on DB with range deletes
-              assert(!(
-                (ikey_.type == kTypeBlobIndex) && (start_seqnum_ > 0)
-              ));
+              assert(!((ikey_.type == kTypeBlobIndex) && (start_seqnum_ > 0)));
               if (ikey_.sequence >= start_seqnum_) {
                 saved_key_.SetInternalKey(ikey_);
                 valid_ = true;
@@ -496,8 +490,9 @@ bool DBIter::FindNextUserEntryInternal(bool skipping, bool prefix_check) {
               } else {
                 // this key and all previous versions shouldn't be included,
                 // skipping
-                saved_key_.SetUserKey(ikey_.user_key,
-                  !pin_thru_lifetime_ || !iter_->IsKeyPinned() /* copy */);
+                saved_key_.SetUserKey(
+                    ikey_.user_key,
+                    !pin_thru_lifetime_ || !iter_->IsKeyPinned() /* copy */);
                 skipping = true;
               }
             } else {
@@ -601,7 +596,11 @@ bool DBIter::FindNextUserEntryInternal(bool skipping, bool prefix_check) {
       iter_->Seek(last_key);
       RecordTick(statistics_, NUMBER_OF_RESEEKS_IN_ITERATION);
     } else {
+#ifdef JELLYFISH
+      iter_->NextChain();
+#else
       iter_->Next();
+#endif
     }
   } while (iter_->Valid());
 
