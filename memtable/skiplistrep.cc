@@ -68,7 +68,7 @@ public:
     // All memory is allocated through allocator; nothing to report here
     return 0;
   }
-#ifdef NEXT_CHAIN
+#ifdef JELLYFISH
   virtual void Get(const LookupKey& k, void* callback_args,
                    bool (*callback_func)(void* arg,
                                          const char* entry)) override {
@@ -126,7 +126,7 @@ public:
     virtual const char* key() const override {
       return iter_.key();
     }
-#ifdef NEXT_CHAIN
+#ifdef JELLYFISH
 	virtual void NextChain() {
 		iter_.NextChain();
 	}
@@ -143,7 +143,7 @@ public:
     }
 
     // Advance to the first entry with a key >= target
-#ifdef NEXT_CHAIN
+#ifdef JELLYFISH
 	 virtual void Seek_Chain(const Slice& user_key, const char* memtable_key)
       {
       if (memtable_key != nullptr) {

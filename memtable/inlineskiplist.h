@@ -56,7 +56,7 @@
 #include "util/coding.h"
 #include <mutex>
 #include <cstdint>
-#define NEXT_CHAIN
+#define JELLYFISH
 
 #define MAX_HEIGHT 12
 #define P_FACTOR 4
@@ -200,7 +200,7 @@ namespace rocksdb {
 			// Returns the key at the current position.
 			// REQUIRES: Valid()
 			const char* key() const;
-#ifdef NEXT_CHAIN
+#ifdef JELLYFISH
 			void NextChain();
 #endif
 			// Advances to the next position.
@@ -210,7 +210,7 @@ namespace rocksdb {
 			// Advances to the previous position.
 			// REQUIRES: Valid()
 			void Prev();
-#ifdef NEXT_CHAIN
+#ifdef JELLYFISH
 			void Seek_Chain(const char* target);
 #endif
 			// Advance to the first entry with a key >= target
@@ -485,7 +485,7 @@ namespace rocksdb {
 			chain_=nullptr;
 		}
 	}
-#ifdef NEXT_CHAIN
+#ifdef JELLYFISH
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::NextChain() {
 			chain_ = chain_->GetChain();
@@ -513,7 +513,7 @@ namespace rocksdb {
 			}
 		}
 	}
-#ifdef NEXT_CHAIN
+#ifdef JELLYFISH
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Seek_Chain(const char* target) {
 			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
