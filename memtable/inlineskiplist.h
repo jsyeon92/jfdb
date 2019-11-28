@@ -488,7 +488,7 @@ namespace rocksdb {
 #ifdef NEXT_CHAIN
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::NextChain() {
-			chain_ = node_->GetChain();
+			chain_ = chain_->GetChain();
 	}
 #endif
 	template <class Comparator>
@@ -1073,10 +1073,9 @@ namespace rocksdb {
 		}
 #ifdef JELLYFISH
 		if(rv >=0){
-			if (InsertChain_Concurrently(key, splice, rv)){
-				splice->height_=0;		
-				return true;
-			}
+			InsertChain_Concurrently(key, splice, rv);
+			splice->height_=0;		
+			return true;
 		}
 #endif
 		bool splice_is_valid = true;
@@ -1190,43 +1189,10 @@ retry:
 		chain_header = curr->GetChain();//node level 0 
 
 		if (chain_header == nullptr) {
-#if 1
 			if (curr->CASUpdateChain(nullptr, nnode)) {
 					return true;
 			}else
 				goto retry;
-#else
-			uint64_t seq_curr = curr->UnstashSeq();
-			const char* key_curr = curr->Key();//current->key
-			uint32_t key_size = 0;
-			const char* key_ptr = GetVarint32Ptr(key_curr, key_curr + 5, &key_size);
-			Slice value = GetLengthPrefixedSlice(key_ptr + key_size);
-			uint32_t val_size = static_cast<uint32_t>(value.size());
-			uint32_t internal_key_size = key_size + 8;
-			const uint32_t encoded_len = VarintLength(internal_key_size) + internal_key_size + VarintLength(val_size) + val_size;
-			Node* Header = AllocateNode_Seq(encoded_len, 1, seq_curr);
-			char* headerkey = const_cast<char*>(Header->Key());
-			memcpy(headerkey, key_curr, encoded_len);
-
-			if (seq_update > seq_curr) {//[1]
-				update_chain->SetUpdateChain(Header);
-				if (curr->CASUpdateChain(nullptr, update_chain)) {
-					return true;
-				}
-				else {
-					goto retry;
-				}
-			}
-			else {// [2]
-				Header->SetUpdateChain(update_chain);
-				if (curr->CASUpdateChain(nullptr, Header)) {
-					return true;
-				}
-				else {
-					goto retry;
-				}
-			}
-#endif
 		}
 		else {
 			nnode->SetUpdateChain(chain_header);

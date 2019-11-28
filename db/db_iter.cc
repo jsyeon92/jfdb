@@ -597,7 +597,10 @@ bool DBIter::FindNextUserEntryInternal(bool skipping, bool prefix_check) {
       RecordTick(statistics_, NUMBER_OF_RESEEKS_IN_ITERATION);
     } else {
 #ifdef JELLYFISH
-      iter_->NextChain();
+      if( skipping == false)
+	    iter_->NextChain();
+	  else
+		iter_->Next();
 #else
       iter_->Next();
 #endif
