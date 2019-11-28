@@ -52,11 +52,10 @@
 
 #define JELLYFISH
 
-#if 1
-#include "util/coding.h"
-#include <mutex>
+#ifdef JELLYFISH
 #include <cstdint>
-#define JELLYFISH
+#define JELLYCACHE
+#define JELLYCACHE_SIZE 12
 
 #define MAX_HEIGHT 12
 #define P_FACTOR 4
@@ -139,6 +138,9 @@ namespace rocksdb {
 #ifdef JELLYFISH
 		bool InsertChain_Concurrently(const char* key, const Splice* splice, int fl);
 #endif
+#ifdef JELLYCACHE
+        bool Insert_Cache(Node* curr);
+#endif  // JELLYCACHE
 
 		// Inserts a key allocated by AllocateKey with a hint of last insert
 		// position in the skip-list. If hint points to nullptr, a new hint will be
@@ -196,7 +198,7 @@ namespace rocksdb {
 
 			// Returns true iff the iterator is positioned at a valid node.
 			bool Valid() const;
-
+			
 			// Returns the key at the current position.
 			// REQUIRES: Valid()
 			const char* key() const;
@@ -288,6 +290,10 @@ namespace rocksdb {
 #endif
 		// Returns the earliest node with a key >= key.
 		// Return nullptr if there is no such node.
+#ifdef JELLYCACHE
+		Node* Search_Cache(const char* key) const;
+#endif  // JELLYCACHE
+
 		Node* FindGreaterOrEqual(const char* key) const;
 
 		// Return the latest node with a key < key.
@@ -362,14 +368,14 @@ namespace rocksdb {
 		// next_[0].  This is used for passing data from AllocateKey to Insert.
 		void StashHeight(const int height) {
 			assert(sizeof(int) <= sizeof(next_[-2]));
-			memcpy(&next_[-1], &height, sizeof(int));
+			memcpy(&next_[-2], &height, sizeof(int));
 		}
 
 		// Retrieves the value passed to StashHeight.  Undefined after a call
 		// to SetNext or NoBarrier_SetNext.
 		int UnstashHeight() const {
 			int rv;
-			memcpy(&rv, &next_[-1], sizeof(int));
+			memcpy(&rv, &next_[-2], sizeof(int));
 			return rv;
 		}
 #ifdef JELLYFISH
@@ -386,6 +392,19 @@ namespace rocksdb {
 			return next_[0].compare_exchange_strong(expected, x);
 		}
 #endif
+#ifdef JELLYCACHE
+		void init_cnt() { 
+			int rv = 0;
+            memcpy(&next_[-1], &rv, sizeof(int));
+		}
+		int fetch_add() {
+            int rv=0;
+            memcpy(&rv, &next_[-1], sizeof(int));
+            rv += 1;
+            memcpy(&next_[-1], &rv, sizeof(int));
+            return rv;
+		}
+#endif
 		const char* Key() const { return reinterpret_cast<const char*>(&next_[1]); }
 
 		// Accessors/mutators for links.  Wrapped in methods so we can add
@@ -395,30 +414,30 @@ namespace rocksdb {
 			assert(n >= 0);
 			// Use an 'acquire load' so that we observe a fully initialized
 			// version of the returned Node.
-			return (next_[-n -1].load(std::memory_order_acquire));
+			return (next_[-n -2].load(std::memory_order_acquire));
 		}
 
 		void SetNext(int n, Node* x) {
 			assert(n >= 0);
 			// Use a 'release store' so that anybody who reads through this
 			// pointer observes a fully initialized version of the inserted node.
-			next_[-n -1].store(x, std::memory_order_release);
+			next_[-n -2].store(x, std::memory_order_release);
 		}
 
 		bool CASNext(int n, Node* expected, Node* x) {
 			assert(n >= 0);
-			return next_[-n -1].compare_exchange_strong(expected, x);
+			return next_[-n -2].compare_exchange_strong(expected, x);
 		}
 
 		// No-barrier variants that can be safely used in a few locations.
 		Node* NoBarrier_Next(int n) {
 			assert(n >= 0);
-			return next_[-n -1].load(std::memory_order_relaxed);
+			return next_[-n -2].load(std::memory_order_relaxed);
 		}
 
 		void NoBarrier_SetNext(int n, Node* x) {
 			assert(n >= 0);
-			next_[-n -1].store(x, std::memory_order_relaxed);
+			next_[-n -2].store(x, std::memory_order_relaxed);
 		}
 
 		// Insert node after prev on specific level.
@@ -503,18 +522,46 @@ namespace rocksdb {
 #ifdef JELLYFISH
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Seek_Chain(const char* target) {
+#ifdef JELLYCACHE
+			node_ = list_->Search_Cache(target);
+			if(node_ != nullptr){
+				chain_ = node_->GetChain();
+				return;
+			}else{
+				node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+       			if(node_ != nullptr){
+					chain_ = node_->GetChain();//Get level 0 
+				}
+			}
+#else
+
 			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
        		if(node_ != nullptr){
 				chain_ = node_->GetChain();//Get level 0 
 			}
+#endif  // JELLYCACHE
 	}
 #endif
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Seek(const char* target) {
+#ifdef JELLYCACHE
+			node_ = list_->Search_Cache(target);
+			if(node_ != nullptr){
+				chain_ = node_->GetChain();
+				return;
+			}else{
+				node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+       			if(node_ != nullptr){
+					chain_ = node_->GetChain();//Get level 0 
+				}
+			}
+#else
+
 			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
        		if(node_ != nullptr){
 				chain_ = node_->GetChain();//Get level 0 
 			}
+#endif  // JELLYCACHE
 	}
 
 	template <class Comparator>
@@ -599,6 +646,25 @@ namespace rocksdb {
 		assert(n != head_);
 		return (n != nullptr) && (compare_(n->Key(), key) < 0);
 	}
+#ifdef JELLYCACHE
+	template <class Comparator>
+	typename InlineSkipList<Comparator>::Node*
+		InlineSkipList<Comparator>::Search_Cache(const char* target) const {
+		Node* x = head_;
+        while (true){
+			Node* next = x->GetChain(); //Cache Header
+			int cmp = (next == nullptr) ? 1 : compare_(next->GetChain()->Key(),target,(uint64_t)1);
+			if(cmp == 0){
+				return next->GetChain();
+			}
+			else if(cmp == 1){
+				return nullptr;
+			}else{
+				x = next;
+			}
+		}
+	}
+#endif
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::FindGreaterOrEqual(const char* key) const {
@@ -770,7 +836,11 @@ namespace rocksdb {
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::AllocateNode(size_t key_size, int height) {
+#ifdef JELLYCACHE
+        auto prefix = sizeof(std::atomic<Node*>) * (height + 1);
+#else
 		auto prefix = sizeof(std::atomic<Node*>) * (height);
+#endif
 		// prefix is space for the height - 1 pointers that we store before
 		// the Node instance (next_[-(height - 1) .. -1]).  Node starts at
 		// raw + prefix, and holds the bottom-mode (level 0) skip list pointer
@@ -893,6 +963,13 @@ namespace rocksdb {
 		int recompute_level) {
 		assert(recompute_level > 0);
 		assert(recompute_level <= splice->height_);
+#ifdef JELLYCACHE
+		Node* cnode = Search_Cache(key);
+		if(cnode != nullptr){
+			splice->next_[0] = cnode;
+			return 0;
+		}
+#endif
 		int i=0;
 		int insert_chain=0;
 		for (i = recompute_level - 1; i >= 0; --i) {
@@ -1154,6 +1231,12 @@ retry:
 
 		if (chain_header == nullptr) {
 			if (curr->CASUpdateChain(nullptr, nnode)) {
+#ifdef JELLYCACHE
+                if (curr->fetch_add() == 100) {
+					Insert_Cache(curr);
+				}
+#endif  // JELLYCACHE
+
 					return true;
 			}else
 				goto retry;
@@ -1161,6 +1244,11 @@ retry:
 		else {
 			nnode->SetUpdateChain(chain_header);
 			if (curr->CASUpdateChain(chain_header, nnode)) {
+#ifdef JELLYCACHE
+                if (curr->fetch_add() == 100) {
+                    Insert_Cache(curr);
+                }
+#endif  // JELLYCACHE
 				return true;
 			}
 			else {
@@ -1170,6 +1258,39 @@ retry:
 		}
 	}
 #endif
+#ifdef JELLYCACHE
+    template <class Comparator>
+    bool InlineSkipList<Comparator>::Insert_Cache(Node* curr) {
+		Node* before;
+		Node* next;
+		Node* out_prev;
+		Node* out_next;
+
+		int i=0;
+		before=head_;
+		next=nullptr;
+		Node* x = AllocateNode(0,1);
+        x->SetUpdateChain(curr);
+	
+		while (true){
+			while(true){
+				next = before->GetChain();
+				if (!KeyIsAfterNode_Equal(curr->Key(), next, &i)) {// A > B
+					out_prev=before;
+					out_next=next;
+					break;
+				}
+				before = next;
+			}
+			x->NoBarrier_SetNext(0, out_next);
+			if (out_prev->CASNext(0, out_next, x)) {
+				// success
+				return true;
+			}
+		}
+	}
+#endif  // JELLYCACHE
+
 	template <class Comparator>
 	bool InlineSkipList<Comparator>::Contains(const char* key) const {
 		Node* x = FindGreaterOrEqual(key);
