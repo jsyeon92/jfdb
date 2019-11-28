@@ -374,22 +374,10 @@ namespace rocksdb {
 		}
 #ifdef JELLYFISH
 		void InitChain(){
-/*
-			Node* t = nullptr;
-			memcpy(&next_[-1], &t, sizeof(Node*));
-*/
 			next_[0].store(nullptr);
 		}
 		Node* GetChain() const {
-/*
-			Node* rv = nullptr;
-			memcpy(&rv, &next_[-1], sizeof(Node *));
-			return rv;
-*/
-			//return next_[-1].load(std::memory_order_acquire);
-			return next_[0].load(std::memory_order_release);
-			//return next_[-1].load();
-			
+			return next_[0].load(std::memory_order_acquire);
 		}
 		void SetUpdateChain(Node* x) {
 			next_[0].store(x, std::memory_order_release);
@@ -398,7 +386,6 @@ namespace rocksdb {
 			return next_[0].compare_exchange_strong(expected, x);
 		}
 #endif
-
 		const char* Key() const { return reinterpret_cast<const char*>(&next_[1]); }
 
 		// Accessors/mutators for links.  Wrapped in methods so we can add
@@ -524,31 +511,10 @@ namespace rocksdb {
 #endif
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Seek(const char* target) {
-#if 1
 			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
        		if(node_ != nullptr){
 				chain_ = node_->GetChain();//Get level 0 
 			}
-#else
-			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
-       		if(node_ != nullptr){
-				chain_ = node_->GetChain();//Get level 0 
-				if (chain_ == nullptr) {
-					return ;
-				}
-				else {
-					uint64_t seq = GetSequenceNum(target);
-					while(chain_ != nullptr){
-						uint64_t c_seq = chain_->UnstashSeq();
-						if(seq >= c_seq)
-							return ;
-						else
-							chain_=chain_->GetChain();
-					}
-					printf("SEEK_FAIL\n");
-				}
-			}
-#endif
 	}
 
 	template <class Comparator>
@@ -804,9 +770,7 @@ namespace rocksdb {
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::AllocateNode(size_t key_size, int height) {
-	//	auto prefix = sizeof(std::atomic<Node*>) * (height - 1) + sizeof(const char*);
-		
-		auto prefix = sizeof(std::atomic<Node*>) * (height );
+		auto prefix = sizeof(std::atomic<Node*>) * (height);
 		// prefix is space for the height - 1 pointers that we store before
 		// the Node instance (next_[-(height - 1) .. -1]).  Node starts at
 		// raw + prefix, and holds the bottom-mode (level 0) skip list pointer
