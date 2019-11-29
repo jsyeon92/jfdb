@@ -56,10 +56,15 @@
 #include "util/coding.h"
 #include <mutex>
 #include <cstdint>
+#include "concurrentqueue.h"
 #define JELLYFISH
 
 #define MAX_HEIGHT 12
 #define P_FACTOR 4
+#endif
+#ifdef FREESPACE
+#define TRACE
+using namespace moodycamel; 
 #endif
 namespace rocksdb {
 	template <class Comparator>
@@ -82,15 +87,20 @@ namespace rocksdb {
 		ConcurrentQueue<free_node_entry> free_node_queue[MAX_HEIGHT+2];
 		std::atomic<int> flag;
 
-		void Chain_reclaim(Node* prev){
+		void Chain_Reclaim(Node* prev){
 			Node* next = nullptr;
 			next = prev->GetChain();
 			while(next != nullptr){
-				size_t height = next->UnstashHeight();
-				size_t key_size = next->UnstashSize();
+				int height_bit = next->UnstashHeight();
+				size_t height=height_bit & 0xff;
+				size_t key_size = height_bit >> 8;
 				free_node_entry x(next, height, key_size);
-				node->InitChain();
+				prev->InitChain();
 				free_node_queue[height].enqueue(x);
+#ifdef TRACE
+				chain_cnt.fetch_sub(1);
+				reclaim_cnt.fetch_add(1);
+#endif
 				prev = next;
 				next = next->GetChain();
 			}
@@ -99,6 +109,11 @@ namespace rocksdb {
 		void Memory_Reclaim(){
 			printf("[MC]Start\n");
 			Node* before = head_;
+		
+#ifdef TRACE
+			if(chain_cnt.load() < 10)
+				return ;
+#endif
 			while(true){
 				Node* next = before->Next(0);
 				if(next == nullptr)//No Key
@@ -113,7 +128,17 @@ namespace rocksdb {
 			}
 			printf("[MC]End\n");
 		}
-	
+
+		int Print_Trace(){
+			printf("===================================\n");
+			printf("[MEM] Node Cnt		: %ld\n",(unsigned long)node_cnt.load());
+			printf("[MEM] Chain Cnt		: %ld\n",(unsigned long)chain_cnt.load());
+			printf("[MEM] Reclaim Cnt	: %ld\n",(unsigned long)reclaim_cnt.load());
+			printf("[MEM] \n");
+			printf("[MEM] \n");
+			printf("===================================\n");
+			return (int)chain_cnt.load();
+		}	
 #endif
 #ifdef JELLYFISH
 		inline void PrintKey(const char* ikey) const
@@ -294,6 +319,7 @@ namespace rocksdb {
 #ifdef TRACE
 		std::atomic<int> node_cnt;
 		std::atomic<int> chain_cnt;
+		std::atomic<int> reclaim_cnt;
 #endif
 		std::atomic<int> max_height_;  // Height of the entire list
 
@@ -405,9 +431,10 @@ namespace rocksdb {
 	struct InlineSkipList<Comparator>::Node {
 		// Stores the height of the node in the memory location normally used for
 		// next_[0].  This is used for passing data from AllocateKey to Insert.
-		void StashHeight(const int height) {
-			assert(sizeof(int) <= sizeof(next_[-2]));
-			memcpy(&next_[-1], &height, sizeof(int));
+		void StashHeight(const int height, const int key_size) {
+			assert(sizeof(int) <= sizeof(next_[-1]));
+			int merge_height = key_size << 8 | height;
+			memcpy(&next_[-1], &merge_height, sizeof(int));
 		}
 
 		// Retrieves the value passed to StashHeight.  Undefined after a call
@@ -794,6 +821,7 @@ namespace rocksdb {
 #ifdef TRACE
 		node_cnt(0),
 		chain_cnt(0),
+		reclaim_cnt(0),
 #endif
 		max_height_(1),
 		seq_splice_(AllocateSplice()) {
@@ -805,9 +833,6 @@ namespace rocksdb {
 		for (int i = 0; i < kMaxHeight_; ++i) {
 			head_->SetNext(i, nullptr);
 		}
-#ifdef FREESPACE
-		flag.store(0);
-#endif
 	}
 
 	template <class Comparator>
@@ -834,8 +859,8 @@ namespace rocksdb {
 		// however, so that it can perform the proper links.  Since we're not
 		// using the pointers at the moment, StashHeight temporarily borrow
 		// storage from next_[0] for that purpose.
-		x->StashHeight(height);
-		//x->InitChain();
+		x->StashHeight(height, key_size);
+		x->InitChain();
 		return x;
 	}
 
@@ -971,7 +996,11 @@ namespace rocksdb {
 	bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
 		bool allow_partial_splice_fix) {
 		Node* x = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
+#ifdef FREESPACE
+		int height = x->UnstashHeight() & 0xff;
+#else
 		int height = x->UnstashHeight();
+#endif
 		assert(height >= 1 && height <= kMaxHeight_);
 
 		int max_height = max_height_.load(std::memory_order_relaxed);
