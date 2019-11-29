@@ -51,7 +51,7 @@
 #include "util/random.h"
 
 #define JELLYFISH
-
+#define FREESPACE
 #if 1
 #include "util/coding.h"
 #include <mutex>
@@ -70,6 +70,51 @@ namespace rocksdb {
 
 	public:
 		static const uint16_t kMaxPossibleHeight = 32;
+#ifdef FREESPACE
+		struct free_node_entry{
+			Node* node_;
+			size_t height_;
+			size_t key_size_;
+			free_node_entry() : node_(nullptr), height_(0), key_size_(0){}
+	
+			free_node_entry(Node* node , size_t height, size_t key_size): node_(node), height_(height), key_size_(key_size){}
+		};
+		ConcurrentQueue<free_node_entry> free_node_queue[MAX_HEIGHT+2];
+		std::atomic<int> flag;
+
+		void Chain_reclaim(Node* prev){
+			Node* next = nullptr;
+			next = prev->GetChain();
+			while(next != nullptr){
+				size_t height = next->UnstashHeight();
+				size_t key_size = next->UnstashSize();
+				free_node_entry x(next, height, key_size);
+				node->InitChain();
+				free_node_queue[height].enqueue(x);
+				prev = next;
+				next = next->GetChain();
+			}
+		}
+
+		void Memory_Reclaim(){
+			printf("[MC]Start\n");
+			Node* before = head_;
+			while(true){
+				Node* next = before->Next(0);
+				if(next == nullptr)//No Key
+					return;
+
+				Node* chain_header = next->GetChain();
+				if(chain_header != nullptr){
+					//Chain Reclaim
+					Chain_Reclaim(chain_header);
+				}
+				before = next;
+			}
+			printf("[MC]End\n");
+		}
+	
+#endif
 #ifdef JELLYFISH
 		inline void PrintKey(const char* ikey) const
 		{
@@ -760,6 +805,9 @@ namespace rocksdb {
 		for (int i = 0; i < kMaxHeight_; ++i) {
 			head_->SetNext(i, nullptr);
 		}
+#ifdef FREESPACE
+		flag.store(0);
+#endif
 	}
 
 	template <class Comparator>

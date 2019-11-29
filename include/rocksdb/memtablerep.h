@@ -41,6 +41,7 @@
 #include <stdlib.h>
 #include <rocksdb/slice.h>
 #define JELLYFISH
+#define FREESPACE
 namespace rocksdb {
 
 class Arena;
@@ -141,7 +142,9 @@ class MemTableRep {
 
   // Returns true iff an entry that compares equal to key is in the collection.
   virtual bool Contains(const char* key) const = 0;
-
+#ifdef FREESPACE1
+  virtual void Memory_Reclaim_Rep();
+#endif
   // Notify this table rep that it will no longer be added to. By default,
   // does nothing.  After MarkReadOnly() is called, this table rep will
   // not be written to (ie No more calls to Allocate(), Insert(),

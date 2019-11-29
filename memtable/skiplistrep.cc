@@ -91,7 +91,15 @@ public:
     }
   }
 #endif
-
+#ifdef FREESPACE
+  void Memory_Reclaim_Rep(){
+	//printf("Memory_Reclaim_Rep Start : \n");
+	while(1){
+		skip_list_.Memory_Reclaim();
+		Sleep(1);
+	}
+  }
+#endif
   uint64_t ApproximateNumEntries(const Slice& start_ikey,
                                  const Slice& end_ikey) override {
     std::string tmp;
@@ -309,7 +317,15 @@ public:
 MemTableRep* SkipListFactory::CreateMemTableRep(
     const MemTableRep::KeyComparator& compare, Allocator* allocator,
     const SliceTransform* transform, Logger* /*logger*/) {
+#ifdef FREESPACE
+	SkipListRep* tmp = new SkipListRep(compare, allocator, transform, lookahead_);
+	//std::thread t1(&SkipListRep::Memory_Reclaim_Rep, tmp, 100);
+	new std::thread(&SkipListRep::Memory_Reclaim_Rep, tmp);
+	MemTableRep* tmp2 = tmp;
+	return tmp2;
+#else
   return new SkipListRep(compare, allocator, transform, lookahead_);
+#endif
 }
 
 } // namespace rocksdb
