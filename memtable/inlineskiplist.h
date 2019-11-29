@@ -134,7 +134,7 @@ namespace rocksdb {
 			printf("[MEM] Node Cnt		: %ld\n",(unsigned long)node_cnt.load());
 			printf("[MEM] Chain Cnt		: %ld\n",(unsigned long)chain_cnt.load());
 			printf("[MEM] Reclaim Cnt	: %ld\n",(unsigned long)reclaim_cnt.load());
-			printf("[MEM] \n");
+			printf("[MEM] Reused  Cnt	: %ld\n",(unsigned long)reused_cnt.load());
 			printf("[MEM] \n");
 			printf("===================================\n");
 			return (int)chain_cnt.load();
@@ -320,6 +320,7 @@ namespace rocksdb {
 		std::atomic<int> node_cnt;
 		std::atomic<int> chain_cnt;
 		std::atomic<int> reclaim_cnt;
+		std::atomic<int> reused_cnt;
 #endif
 		std::atomic<int> max_height_;  // Height of the entire list
 
@@ -822,6 +823,7 @@ namespace rocksdb {
 		node_cnt(0),
 		chain_cnt(0),
 		reclaim_cnt(0),
+		reused_cnt(0),
 #endif
 		max_height_(1),
 		seq_splice_(AllocateSplice()) {
@@ -839,7 +841,42 @@ namespace rocksdb {
 	char* InlineSkipList<Comparator>::AllocateKey(size_t key_size) {
 		return const_cast<char*>(AllocateNode(key_size, RandomHeight())->Key());
 	}
+#ifdef FREESPACE
+	template <class Comparator>
+	typename InlineSkipList<Comparator>::Node*
+		InlineSkipList<Comparator>::AllocateNode(size_t key_size, int height) {
+		int i=0;
+Allocate:
+		if(free_node_queue[height].size_approx() < 3 || i > 5){
+			auto prefix = sizeof(std::atomic<Node*>) * (height);
+			char* raw = allocator_->AllocateAligned(prefix + sizeof(Node) + key_size);
+			Node* x = reinterpret_cast<Node*>(raw + prefix);
+			x->StashHeight(height, key_size);
+			x->InitChain();
+			return x;
 
+		}else{
+			i++;
+			free_node_entry x;
+			bool found = free_node_queue[height].try_dequeue(x);
+			if(!found){
+				goto Allocate;
+			}
+			Node* free_node = x.node_;
+			if((size_t)x.key_size_ < key_size){
+				free_node_queue[height].enqueue(x);
+				goto Allocate;
+			}
+#ifdef TRACE
+			reclaim_cnt.fetch_sub(1);
+			reused_cnt.fetch_add(1);		
+#endif
+			free_node->StashHeight(height, x.key_size_);
+			free_node->InitChain();
+			return free_node;
+		}	
+	}
+#else
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::AllocateNode(size_t key_size, int height) {
@@ -863,7 +900,7 @@ namespace rocksdb {
 		x->InitChain();
 		return x;
 	}
-
+#endif
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Splice*
 		InlineSkipList<Comparator>::AllocateSplice() {
