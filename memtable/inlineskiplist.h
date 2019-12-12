@@ -107,7 +107,7 @@ namespace rocksdb {
 		}
 
 		void Memory_Reclaim(){
-			printf("[MC]Start\n");
+			//printf("[MC]Start\n");
 			Node* before = head_;
 		
 #ifdef TRACE
@@ -126,10 +126,11 @@ namespace rocksdb {
 				}
 				before = next;
 			}
-			printf("[MC]End\n");
+			//printf("[MC]End\n");
 		}
 
 		int Print_Trace(){
+#ifdef JELLYFISH_STAT
 			printf("===================================\n");
 			printf("[MEM] Node Cnt		: %ld\n",(unsigned long)node_cnt.load());
 			printf("[MEM] Chain Cnt		: %ld\n",(unsigned long)chain_cnt.load());
@@ -137,6 +138,7 @@ namespace rocksdb {
 			printf("[MEM] Reused  Cnt	: %ld\n",(unsigned long)reused_cnt.load());
 			printf("[MEM] \n");
 			printf("===================================\n");
+#endif
 			return (int)chain_cnt.load();
 		}	
 #endif
