@@ -18,6 +18,10 @@ class SkipListRep : public MemTableRep {
 
   friend class LookaheadIterator;
 public:
+#ifdef JELLYFISH
+  std::thread* m_thread_;
+  std::atomic_bool t_con_; 
+#endif
  explicit SkipListRep(const MemTableRep::KeyComparator& compare,
                       Allocator* allocator, const SliceTransform* transform,
                       const size_t lookahead)
@@ -25,7 +29,12 @@ public:
        skip_list_(compare, allocator),
        cmp_(compare),
        transform_(transform),
-       lookahead_(lookahead) {}
+       lookahead_(lookahead),
+#ifdef JELLYFISH
+	   m_thread_(nullptr),
+	   t_con_(true)
+#endif
+ {}
 
 
  virtual KeyHandle Allocate(const size_t len, char** buf) override {
@@ -93,16 +102,16 @@ public:
 #endif
 #ifdef FREESPACE
   void Memory_Reclaim_Rep(){
-	int chain_cnt=0;
+//	int chain_cnt=0;
 	int time = 1;
-	while(1){
+	while(t_con_){
 		sleep(time);
-		//printf("Memory_Reclaim_Rep Start : \n");
 		skip_list_.Memory_Reclaim();
-		chain_cnt=skip_list_.Print_Trace();
+		skip_list_.Print_Trace();
+/*
 		if(chain_cnt == 0)
 			time += 1;
-
+*/
 	}
   }
 #endif
@@ -115,7 +124,12 @@ public:
     return (end_count >= start_count) ? (end_count - start_count) : 0;
   }
 
-  virtual ~SkipListRep() override { }
+  virtual ~SkipListRep() override {
+#ifdef JELLYFISH
+	t_con_.store(false);
+	m_thread_->join();
+#endif
+  }
 
   // Iteration over the contents of a skip list
   class Iterator : public MemTableRep::Iterator {
@@ -326,7 +340,7 @@ MemTableRep* SkipListFactory::CreateMemTableRep(
 #ifdef FREESPACE
 	SkipListRep* tmp = new SkipListRep(compare, allocator, transform, lookahead_);
 	//std::thread t1(&SkipListRep::Memory_Reclaim_Rep, tmp, 100);
-	new std::thread(&SkipListRep::Memory_Reclaim_Rep, tmp);
+	tmp->m_thread_ = new std::thread(&SkipListRep::Memory_Reclaim_Rep, tmp);
 	MemTableRep* tmp2 = tmp;
 	return tmp2;
 #else
