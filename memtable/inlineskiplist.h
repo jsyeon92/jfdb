@@ -61,6 +61,8 @@
 #define MAX_HEIGHT 12
 #define P_FACTOR 4
 #endif
+
+#define MEMORY_USAGE
 namespace rocksdb {
 	template <class Comparator>
 	class InlineSkipList {
@@ -109,6 +111,24 @@ namespace rocksdb {
 				if (next == NULL)break;
 				t = next->GetChain();
 			}
+			printf("==================================================\n");
+		}
+#endif
+#ifdef MEMORY_USAGE
+		void Memory_Usage(){
+			printf("==================================================\n");
+			printf("rocksdb_all_sum				: %d\n", rocksdb_sum.load());
+			printf("rocksdb_in_used_height		: %d\n", rocksdb_in_used_height.load());
+			printf("rocksdb_in_used_data		: %d\n", rocksdb_in_used_data.load());
+			printf("rocksdb_old_all				: %d\n", rocksdb_old_data.load());
+//			printf("rocksdb		: %d\n", rocksdb_sum.load());
+			printf("in_used_height			: %d\n", in_used_height.load());
+			printf("in_used_data			: %d\n", in_used_data.load());
+			printf("in_used_pdq				: %d\n", in_used_pdq.load());
+			printf("un_used_pdq				: %d\n", un_used_pdq.load());
+			printf("old_data_diable			: %d\n", old_data_disable.load());
+			printf("old_data_able			: %d\n", old_data_able.load());
+			printf("un_used_index			: %d\n", un_used_index.load());
 			printf("==================================================\n");
 		}
 #endif
@@ -250,6 +270,21 @@ namespace rocksdb {
 		std::atomic<int> node_cnt;
 		std::atomic<int> chain_cnt;
 #endif
+#ifdef MEMORY_USAGE
+		//rocksdb
+		std::atomic<int> rocksdb_sum;
+		std::atomic<int> rocksdb_in_used_height;
+		std::atomic<int> rocksdb_in_used_data;
+		std::atomic<int> rocksdb_old_data;
+		//jellyfish
+		std::atomic<int> in_used_height;
+		std::atomic<int> in_used_data;
+		std::atomic<int> in_used_pdq;
+		std::atomic<int> un_used_pdq;
+		std::atomic<int> old_data_disable;
+		std::atomic<int> old_data_able;
+		std::atomic<int> un_used_index;
+#endif
 		std::atomic<int> max_height_;  // Height of the entire list
 
 									   // seq_splice_ is a Splice used for insertions in the non-concurrent
@@ -364,7 +399,18 @@ namespace rocksdb {
 			assert(sizeof(int) <= sizeof(next_[-2]));
 			memcpy(&next_[-1], &height, sizeof(int));
 		}
-
+#ifdef MEMORY_USAGE
+		void StashHeight_Key(const int height, int key_size) {
+			assert(sizeof(int) <= sizeof(next_[-2]));
+			int tmp = key_size << 8 | height;
+			memcpy(&next_[-1], &tmp, sizeof(int));
+		}
+		int UnstashHeight_Key(){
+			int rv;
+			memcpy(&rv, &next_[-1], sizeof(int));
+			return rv;
+		}
+#endif
 		// Retrieves the value passed to StashHeight.  Undefined after a call
 		// to SetNext or NoBarrier_SetNext.
 		int UnstashHeight() const {
@@ -750,6 +796,19 @@ namespace rocksdb {
 		node_cnt(0),
 		chain_cnt(0),
 #endif
+#ifdef MEMORY_USAGE
+		rocksdb_sum(0),
+		rocksdb_in_used_height(0),
+		rocksdb_in_used_data(0),
+		rocksdb_old_data(0),
+		in_used_height(0),
+		in_used_data(0),
+		in_used_pdq(0),
+		un_used_pdq(0),
+		old_data_disable(0),
+		old_data_able(0),
+		un_used_index(0),
+#endif
 		max_height_(1),
 		seq_splice_(AllocateSplice()) {
 		assert(max_height > 0 && kMaxHeight_ == static_cast<uint32_t>(max_height));
@@ -778,7 +837,14 @@ namespace rocksdb {
 		// the Node.
 		char* raw = allocator_->AllocateAligned(prefix + sizeof(Node) + key_size);
 		Node* x = reinterpret_cast<Node*>(raw + prefix);
-
+#ifdef MEMORY_USAGE
+		in_used_data.fetch_add(key_size);
+		in_used_height.fetch_add(prefix);
+		un_used_pdq.fetch_add(8);
+		rocksdb_sum.fetch_add(prefix + sizeof(Node) + key_size - 8);
+		rocksdb_in_used_height.fetch_add(prefix);
+		rocksdb_in_used_data.fetch_add(key_size);
+#endif
 		// Once we've linked the node into the skip list we don't actually need
 		// to know its height, because we can implicitly use the fact that we
 		// traversed into a node at level h to known that h is a valid level
@@ -786,7 +852,11 @@ namespace rocksdb {
 		// however, so that it can perform the proper links.  Since we're not
 		// using the pointers at the moment, StashHeight temporarily borrow
 		// storage from next_[0] for that purpose.
+#ifdef MEMORY_USAGE
+		x->StashHeight_Key(height, key_size);
+#else
 		x->StashHeight(height);
+#endif
 		//x->InitChain();
 		return x;
 	}
@@ -923,7 +993,12 @@ namespace rocksdb {
 	bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
 		bool allow_partial_splice_fix) {
 		Node* x = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
+#ifdef MEMORY_USAGE
+		int height = x->UnstashHeight_Key();
+		height=height & 0xff;
+#else
 		int height = x->UnstashHeight();
+#endif
 		assert(height >= 1 && height <= kMaxHeight_);
 
 		int max_height = max_height_.load(std::memory_order_relaxed);
@@ -1037,6 +1112,11 @@ namespace rocksdb {
 		}
 #ifdef JELLYFISH
 		if(rv >=0){
+/*
+#ifdef MEMORY_USAGE
+			uuh_sum.fetch_add(height * 8);
+#endif
+*/
 			InsertChain_Concurrently(key, splice, rv);
 			splice->height_=0;		
 			return true;
@@ -1147,13 +1227,36 @@ namespace rocksdb {
 #ifdef TRACE
 		chain_cnt.fetch_add(1);	
 #endif
+			
 		Node* nnode = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 		Node* chain_header;
+#ifdef MEMORY_USAGE
+		{
+			int height = nnode->UnstashHeight_Key();
+			int key_size = height >> 8;
+			height = height & 0xff;
+			//curr data sub but, actually nnode data sub. it is same.
+			rocksdb_old_data.fetch_add(height * 8 + key_size);
+			rocksdb_in_used_height.fetch_sub(height * 8);
+			rocksdb_in_used_data.fetch_sub(key_size);
+		}	
+#endif
 retry:
 		chain_header = curr->GetChain();//node level 0 
 
 		if (chain_header == nullptr) {
 			if (curr->CASUpdateChain(nullptr, nnode)) {
+#ifdef MEMORY_USAGE
+				int height = nnode->UnstashHeight_Key();
+				int key_size = height >> 8;
+				height = height & 0xff;
+				un_used_index.fetch_add(height * 8);
+				in_used_data.fetch_sub(key_size);
+				in_used_height.fetch_sub(height * 8);
+				old_data_disable.fetch_add(key_size + height *8);	
+				in_used_pdq.fetch_add(8);
+				un_used_pdq.fetch_sub(8);
+#endif
 					return true;
 			}else
 				goto retry;
@@ -1161,6 +1264,23 @@ retry:
 		else {
 			nnode->SetUpdateChain(chain_header);
 			if (curr->CASUpdateChain(chain_header, nnode)) {
+#ifdef MEMORY_USAGE
+			int nnode_height = nnode->UnstashHeight_Key();
+			int	nnode_size = nnode_height >> 8;
+			nnode_height = nnode_height & 0xff;
+		
+			in_used_data.fetch_sub(nnode_size);
+			un_used_index.fetch_sub(nnode_height * 8);
+			un_used_pdq.fetch_sub(8);
+			old_data_able.fetch_add(nnode_size + nnode_height * 8 + 8);
+
+			//chain_head 
+			int height = chain_header->UnstashHeight_Key();
+			height = height & 0xff;
+			
+			in_used_height.fetch_sub(height * 8);
+			un_used_index.fetch_add(height * 8);
+#endif
 				return true;
 			}
 			else {

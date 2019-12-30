@@ -91,7 +91,15 @@ public:
     }
   }
 #endif
-
+#ifdef MEMORY_USAGE
+  void Memory_Usage(){
+		while(1){
+			printf("test\n");
+			skip_list_.Memory_Usage();
+			sleep(1);
+		}
+  }
+#endif
   uint64_t ApproximateNumEntries(const Slice& start_ikey,
                                  const Slice& end_ikey) override {
     std::string tmp;
@@ -309,7 +317,14 @@ public:
 MemTableRep* SkipListFactory::CreateMemTableRep(
     const MemTableRep::KeyComparator& compare, Allocator* allocator,
     const SliceTransform* transform, Logger* /*logger*/) {
+#ifdef MEMORY_USAGE
+  SkipListRep* tmp = new SkipListRep(compare, allocator, transform, lookahead_);
+  new std::thread(&SkipListRep::Memory_Usage, tmp);
+  MemTableRep* tmp2 = tmp;
+  return tmp2;
+#else
   return new SkipListRep(compare, allocator, transform, lookahead_);
+#endif
 }
 
 } // namespace rocksdb
