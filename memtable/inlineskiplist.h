@@ -62,7 +62,7 @@
 #define P_FACTOR 4
 #endif
 
-#define MEMORY_USAGE
+//#define MEMORY_USAGE
 namespace rocksdb {
 	template <class Comparator>
 	class InlineSkipList {
