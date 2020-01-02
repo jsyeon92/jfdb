@@ -105,9 +105,9 @@ public:
 //	int chain_cnt=0;
 	int time = 1;
 	while(t_con_){
-		sleep(time);
+	//	sleep(time);
 		skip_list_.Memory_Reclaim();
-		skip_list_.Print_Trace();
+	//	skip_list_.Print_Trace();
 /*
 		if(chain_cnt == 0)
 			time += 1;
