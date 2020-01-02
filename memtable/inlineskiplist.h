@@ -61,8 +61,6 @@
 #define MAX_HEIGHT 12
 #define P_FACTOR 4
 #endif
-
-#define MEMORY_USAGE
 namespace rocksdb {
 	template <class Comparator>
 	class InlineSkipList {
@@ -111,24 +109,6 @@ namespace rocksdb {
 				if (next == NULL)break;
 				t = next->GetChain();
 			}
-			printf("==================================================\n");
-		}
-#endif
-#ifdef MEMORY_USAGE
-		void Memory_Usage(){
-			printf("==================================================\n");
-			printf("rocksdb_all_sum				: %d\n", rocksdb_sum.load());
-			printf("rocksdb_in_used_height		: %d\n", rocksdb_in_used_height.load());
-			printf("rocksdb_in_used_data		: %d\n", rocksdb_in_used_data.load());
-			printf("rocksdb_old_all				: %d\n", rocksdb_old_data.load());
-//			printf("rocksdb		: %d\n", rocksdb_sum.load());
-			printf("in_used_height			: %d\n", in_used_height.load());
-			printf("in_used_data			: %d\n", in_used_data.load());
-			printf("in_used_pdq				: %d\n", in_used_pdq.load());
-			printf("un_used_pdq				: %d\n", un_used_pdq.load());
-			printf("old_data_diable			: %d\n", old_data_disable.load());
-			printf("old_data_able			: %d\n", old_data_able.load());
-			printf("un_used_index			: %d\n", un_used_index.load());
 			printf("==================================================\n");
 		}
 #endif
@@ -266,25 +246,6 @@ namespace rocksdb {
 		Node* const head_;
 		// Modified only by Insert().  Read racily by readers, but stale
 		// values are ok.
-#ifdef TRACE
-		std::atomic<int> node_cnt;
-		std::atomic<int> chain_cnt;
-#endif
-#ifdef MEMORY_USAGE
-		//rocksdb
-		std::atomic<int> rocksdb_sum;
-		std::atomic<int> rocksdb_in_used_height;
-		std::atomic<int> rocksdb_in_used_data;
-		std::atomic<int> rocksdb_old_data;
-		//jellyfish
-		std::atomic<int> in_used_height;
-		std::atomic<int> in_used_data;
-		std::atomic<int> in_used_pdq;
-		std::atomic<int> un_used_pdq;
-		std::atomic<int> old_data_disable;
-		std::atomic<int> old_data_able;
-		std::atomic<int> un_used_index;
-#endif
 		std::atomic<int> max_height_;  // Height of the entire list
 
 									   // seq_splice_ is a Splice used for insertions in the non-concurrent
@@ -399,18 +360,7 @@ namespace rocksdb {
 			assert(sizeof(int) <= sizeof(next_[-2]));
 			memcpy(&next_[-1], &height, sizeof(int));
 		}
-#ifdef MEMORY_USAGE
-		void StashHeight_Key(const int height, int key_size) {
-			assert(sizeof(int) <= sizeof(next_[-2]));
-			int tmp = key_size << 8 | height;
-			memcpy(&next_[-1], &tmp, sizeof(int));
-		}
-		int UnstashHeight_Key(){
-			int rv;
-			memcpy(&rv, &next_[-1], sizeof(int));
-			return rv;
-		}
-#endif
+
 		// Retrieves the value passed to StashHeight.  Undefined after a call
 		// to SetNext or NoBarrier_SetNext.
 		int UnstashHeight() const {
@@ -420,7 +370,7 @@ namespace rocksdb {
 		}
 #ifdef JELLYFISH
 		void InitChain(){
-			next_[0].store(nullptr);
+			next_[0].store(nullptr, std::memory_order_acquire);
 		}
 		Node* GetChain() const {
 			return next_[0].load(std::memory_order_acquire);
@@ -549,20 +499,62 @@ namespace rocksdb {
 #ifdef JELLYFISH
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Seek_Chain(const char* target) {
-			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
-       		if(node_ != nullptr){
-				chain_ = node_->GetChain();//Get level 0 
+#if 0 
+		node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+       	if(node_ != nullptr){
+			chain_ = node_->GetChain();//Get level 0 
+		}
+#else
+		node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+       	if(node_ != nullptr){
+			chain_ = node_->GetChain();//Get level 0 
+			if(chain_ == nullptr)
+				return ;
+			else{
+				uint64_t seek_seq = GetSequenceNum(target);
+				while(chain_ != nullptr){
+					uint64_t chain_seq = GetSequenceNum(chain_->Key());
+					if(seek_seq >= chain_seq)
+						return ;
+					else
+						chain_=chain_->GetChain();
+				}
+				printf("SEEK FAIL\n");
 			}
+		}
+	
+#endif
 	}
 #endif
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Seek(const char* target) {
-			node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
-       		if(node_ != nullptr){
-				chain_ = node_->GetChain();//Get level 0 
+#if 0
+		node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+       	if(node_ != nullptr){
+			chain_ = node_->GetChain();//Get level 0 
+		}
+#else
+		node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+       	if(node_ != nullptr){
+			chain_ = node_->GetChain();//Get level 0 
+			if(chain_ == nullptr)
+				return ;
+			else{
+				uint64_t seek_seq = GetSequenceNum(target);
+				while(chain_ != nullptr){
+					uint64_t chain_seq = GetSequenceNum(chain_->Key());
+					if(seek_seq >= chain_seq)
+						return ;
+					else
+						chain_=chain_->GetChain();
+				}
+				printf("SEEK FAIL\n");
 			}
-	}
+		}
+	
+#endif
 
+	}
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::SeekForPrev(
 		const char* target) {
@@ -792,23 +784,6 @@ namespace rocksdb {
 		compare_(cmp),
 		allocator_(allocator),
 		head_(AllocateNode(0, max_height)),
-#ifdef TRACE
-		node_cnt(0),
-		chain_cnt(0),
-#endif
-#ifdef MEMORY_USAGE
-		rocksdb_sum(0),
-		rocksdb_in_used_height(0),
-		rocksdb_in_used_data(0),
-		rocksdb_old_data(0),
-		in_used_height(0),
-		in_used_data(0),
-		in_used_pdq(0),
-		un_used_pdq(0),
-		old_data_disable(0),
-		old_data_able(0),
-		un_used_index(0),
-#endif
 		max_height_(1),
 		seq_splice_(AllocateSplice()) {
 		assert(max_height > 0 && kMaxHeight_ == static_cast<uint32_t>(max_height));
@@ -837,14 +812,7 @@ namespace rocksdb {
 		// the Node.
 		char* raw = allocator_->AllocateAligned(prefix + sizeof(Node) + key_size);
 		Node* x = reinterpret_cast<Node*>(raw + prefix);
-#ifdef MEMORY_USAGE
-		in_used_data.fetch_add(key_size);
-		in_used_height.fetch_add(prefix);
-		un_used_pdq.fetch_add(8);
-		rocksdb_sum.fetch_add(prefix + sizeof(Node) + key_size - 8);
-		rocksdb_in_used_height.fetch_add(prefix);
-		rocksdb_in_used_data.fetch_add(key_size);
-#endif
+
 		// Once we've linked the node into the skip list we don't actually need
 		// to know its height, because we can implicitly use the fact that we
 		// traversed into a node at level h to known that h is a valid level
@@ -852,12 +820,8 @@ namespace rocksdb {
 		// however, so that it can perform the proper links.  Since we're not
 		// using the pointers at the moment, StashHeight temporarily borrow
 		// storage from next_[0] for that purpose.
-#ifdef MEMORY_USAGE
-		x->StashHeight_Key(height, key_size);
-#else
 		x->StashHeight(height);
-#endif
-		//x->InitChain();
+		x->InitChain();
 		return x;
 	}
 
@@ -993,12 +957,7 @@ namespace rocksdb {
 	bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
 		bool allow_partial_splice_fix) {
 		Node* x = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
-#ifdef MEMORY_USAGE
-		int height = x->UnstashHeight_Key();
-		height=height & 0xff;
-#else
 		int height = x->UnstashHeight();
-#endif
 		assert(height >= 1 && height <= kMaxHeight_);
 
 		int max_height = max_height_.load(std::memory_order_relaxed);
@@ -1112,11 +1071,6 @@ namespace rocksdb {
 		}
 #ifdef JELLYFISH
 		if(rv >=0){
-/*
-#ifdef MEMORY_USAGE
-			uuh_sum.fetch_add(height * 8);
-#endif
-*/
 			InsertChain_Concurrently(key, splice, rv);
 			splice->height_=0;		
 			return true;
@@ -1151,9 +1105,24 @@ namespace rocksdb {
 					// search, because it should be unlikely that lots of nodes have
 					// been inserted between prev[i] and next[i]. No point in using
 					// next[i] as the after hint, because we know it is stale.
+#ifdef JELLYFISH
+					int already_chain_node=0;
+					FindSpliceForLevel_Equal<false>(key, splice->prev_[i], nullptr, i, &splice->prev_[i],&splice->next_[i], &already_chain_node);
+#else
 					FindSpliceForLevel<false>(key, splice->prev_[i], nullptr, i, &splice->prev_[i],
 						&splice->next_[i]);
-
+#endif
+#ifdef JELLYFISH
+					if(already_chain_node == 1){
+						//insert chain and return;
+						if(i == 0) {
+							InsertChain_Concurrently(key, splice, 0);
+							return true;	
+						}else{
+							printf("FAIL! FAIL! FAIL! FAIL!\n");
+						}
+					}
+#endif	
 					// Since we've narrowed the bracket for level i, we might have
 					// violated the Splice constraint between i and i-1.  Make sure
 					// we recompute the whole thing next time.
@@ -1190,9 +1159,6 @@ namespace rocksdb {
 				splice->prev_[i]->SetNext(i, x);
 			}
 		}
-#ifdef TRACE
-		node_cnt.fetch_add(1);
-#endif
 		if (splice_is_valid) {
 			for (int i = 0; i < height; ++i) {
 				splice->prev_[i] = x;
@@ -1224,68 +1190,61 @@ namespace rocksdb {
 	bool InlineSkipList<Comparator>::InsertChain_Concurrently(const char * key, const Splice* splice, int fl) {
 		Node* curr = splice->next_[fl];
 
-#ifdef TRACE
-		chain_cnt.fetch_add(1);	
-#endif
-			
 		Node* nnode = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 		Node* chain_header;
-#ifdef MEMORY_USAGE
-		{
-			int height = nnode->UnstashHeight_Key();
-			int key_size = height >> 8;
-			height = height & 0xff;
-			//curr data sub but, actually nnode data sub. it is same.
-			rocksdb_old_data.fetch_add(height * 8 + key_size);
-			rocksdb_in_used_height.fetch_sub(height * 8);
-			rocksdb_in_used_data.fetch_sub(key_size);
-		}	
-#endif
+		uint64_t new_seq = GetSequenceNum(key);
 retry:
 		chain_header = curr->GetChain();//node level 0 
 
 		if (chain_header == nullptr) {
-			if (curr->CASUpdateChain(nullptr, nnode)) {
-#ifdef MEMORY_USAGE
-				int height = nnode->UnstashHeight_Key();
-				int key_size = height >> 8;
-				height = height & 0xff;
-				un_used_index.fetch_add(height * 8);
-				in_used_data.fetch_sub(key_size);
-				in_used_height.fetch_sub(height * 8);
-				old_data_disable.fetch_add(key_size + height *8);	
-				in_used_pdq.fetch_add(8);
-				un_used_pdq.fetch_sub(8);
-#endif
-					return true;
-			}else
-				goto retry;
-		}
-		else {
-			nnode->SetUpdateChain(chain_header);
-			if (curr->CASUpdateChain(chain_header, nnode)) {
-#ifdef MEMORY_USAGE
-			int nnode_height = nnode->UnstashHeight_Key();
-			int	nnode_size = nnode_height >> 8;
-			nnode_height = nnode_height & 0xff;
-		
-			in_used_data.fetch_sub(nnode_size);
-			un_used_index.fetch_sub(nnode_height * 8);
-			un_used_pdq.fetch_sub(8);
-			old_data_able.fetch_add(nnode_size + nnode_height * 8 + 8);
-
-			//chain_head 
-			int height = chain_header->UnstashHeight_Key();
-			height = height & 0xff;
-			
-			in_used_height.fetch_sub(height * 8);
-			un_used_index.fetch_add(height * 8);
-#endif
+			uint64_t node_seq = GetSequenceNum(curr->Key()); 
+			if(new_seq > node_seq){
+				if (curr->CASUpdateChain(nullptr, nnode)) {
+						return true;
+				}else
+					goto retry;
+			}else{
+				//Don't add old seq node 
 				return true;
 			}
-			else {
-				nnode->InitChain();
-				goto retry;
+		}
+		else {
+			uint64_t header_seq = GetSequenceNum(chain_header->Key());	
+			if(new_seq > header_seq){//New node insert chain list where header
+				nnode->SetUpdateChain(chain_header);
+				if (curr->CASUpdateChain(chain_header, nnode)) {
+					return true;
+				}
+				else {
+					nnode->InitChain();
+					goto retry;
+				}
+			}else{
+				Node* next_chain = chain_header->GetChain();
+				while(true){
+					if(next_chain == nullptr){
+						if(chain_header->CASUpdateChain(nullptr, nnode))
+							return true;
+						else
+							goto retry;
+					}else{
+						uint64_t next_seq = GetSequenceNum(next_chain->Key());
+						if(new_seq > next_seq){
+							nnode->SetUpdateChain(next_chain);
+							if(chain_header->CASUpdateChain(next_chain, nnode))
+								return true;
+							else
+								goto retry;
+						}else{
+							chain_header = next_chain;
+							Node* tmp_chain = next_chain->GetChain();	
+							if(tmp_chain != nullptr)
+								next_chain = next_chain;
+							else	
+								next_chain = nullptr;
+						}
+					}
+				}
 			}
 		}
 	}
