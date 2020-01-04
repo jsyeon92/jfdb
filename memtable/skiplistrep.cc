@@ -103,15 +103,15 @@ public:
 #ifdef FREESPACE
   void Memory_Reclaim_Rep(){
 //	int chain_cnt=0;
-	int time = 1;
+//	int time = 1;
+	//sleep(1);	
 	while(t_con_){
 	//	sleep(time);
-		skip_list_.Memory_Reclaim();
+		if(skip_list_.work_queue_check() == 1)
+			skip_list_.Memory_Reclaim();
+		else
+			sleep(0.1);
 	//	skip_list_.Print_Trace();
-/*
-		if(chain_cnt == 0)
-			time += 1;
-*/
 	}
   }
 #endif
@@ -127,7 +127,8 @@ public:
   virtual ~SkipListRep() override {
 #ifdef JELLYFISH
 	t_con_.store(false);
-	m_thread_->join();
+	if(m_thread_ != nullptr)
+		m_thread_->join();
 #endif
   }
 
@@ -333,19 +334,23 @@ public:
   }
 };
 }
-
-MemTableRep* SkipListFactory::CreateMemTableRep(
+#ifdef JELLYFISH
+MemTableRep* SkipListFactory::CreateMemTableRep_Jelly(
     const MemTableRep::KeyComparator& compare, Allocator* allocator,
     const SliceTransform* transform, Logger* /*logger*/) {
-#ifdef FREESPACE
 	SkipListRep* tmp = new SkipListRep(compare, allocator, transform, lookahead_);
 	//std::thread t1(&SkipListRep::Memory_Reclaim_Rep, tmp, 100);
 	tmp->m_thread_ = new std::thread(&SkipListRep::Memory_Reclaim_Rep, tmp);
 	MemTableRep* tmp2 = tmp;
+	printf("Jellyfish Skiplist\n");
 	return tmp2;
-#else
-  return new SkipListRep(compare, allocator, transform, lookahead_);
+}
 #endif
+MemTableRep* SkipListFactory::CreateMemTableRep(
+    const MemTableRep::KeyComparator& compare, Allocator* allocator,
+    const SliceTransform* transform, Logger* /*logger*/) {
+	printf("Concurrent Skiplist\n");
+  return new SkipListRep(compare, allocator, transform, lookahead_);
 }
 
 } // namespace rocksdb

@@ -64,6 +64,7 @@
 #endif
 #ifdef FREESPACE
 //#define TRACE
+#define WORK_QUEUE
 using namespace moodycamel; 
 #endif
 namespace rocksdb {
@@ -86,7 +87,9 @@ namespace rocksdb {
 		};
 		ConcurrentQueue<free_node_entry> free_node_queue[MAX_HEIGHT+2];
 		std::atomic<int> flag;
-
+#ifdef WORK_QUEUE
+		ConcurrentQueue<Node*> work_queue;
+#endif
 		void Chain_Reclaim(Node* prev){
 			Node* next = nullptr;
 			next = prev->GetChain();
@@ -105,7 +108,20 @@ namespace rocksdb {
 				next = next->GetChain();
 			}
 		}
-
+#ifdef WORK_QUEUE
+		int work_queue_check(){
+			if(work_queue.size_approx() > 0)
+				return 1;
+			else
+				return 0;
+		}
+		void Memory_Reclaim(){
+			Node* tmp;
+			while(work_queue.try_dequeue(tmp)){
+					Chain_Reclaim(tmp);
+			}
+		}
+#else
 		void Memory_Reclaim(){
 			//printf("[MC]Start\n");
 			Node* before = head_;
@@ -128,7 +144,7 @@ namespace rocksdb {
 			}
 			//printf("[MC]End\n");
 		}
-
+#endif
 #ifdef JELLYFISH_STAT
 		int Print_Trace(){
 			printf("===================================\n");
@@ -136,7 +152,7 @@ namespace rocksdb {
 			printf("[MEM] Chain Cnt		: %ld\n",(unsigned long)chain_cnt.load());
 			printf("[MEM] Reclaim Cnt	: %ld\n",(unsigned long)reclaim_cnt.load());
 			printf("[MEM] Reused  Cnt	: %ld\n",(unsigned long)reused_cnt.load());
-			printf("[MEM] \n");
+			//printf("[MEM] \n");
 			printf("===================================\n");
 			return (int)chain_cnt.load();
 		}	
@@ -1277,6 +1293,11 @@ retry:
 		else {
 			nnode->SetUpdateChain(chain_header);
 			if (curr->CASUpdateChain(chain_header, nnode)) {
+#ifdef WORK_QUEUE
+				Node* tmp = chain_header;
+				work_queue.enqueue(tmp);
+#endif
+
 				return true;
 			}
 			else {

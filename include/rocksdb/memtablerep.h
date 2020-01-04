@@ -266,7 +266,20 @@ class MemTableRepFactory {
       uint32_t /* column_family_id */) {
     return CreateMemTableRep(key_cmp, allocator, slice_transform, logger);
   }
+#ifdef JELLYFISH
+  virtual MemTableRep* CreateMemTableRep_Jelly(const MemTableRep::KeyComparator& key_cmp,
+                                         Allocator* allocator, const SliceTransform* slice_transform,
+                                         Logger* logger){
 
+    return CreateMemTableRep_Jelly(key_cmp, allocator, slice_transform, logger);
+  }
+  virtual MemTableRep* CreateMemTableRep_Jelly(
+      const MemTableRep::KeyComparator& key_cmp, Allocator* allocator,
+      const SliceTransform* slice_transform, Logger* logger,
+      uint32_t /* column_family_id */) {
+    return CreateMemTableRep_Jelly(key_cmp, allocator, slice_transform, logger);
+  }
+#endif
   virtual const char* Name() const = 0;
 
   // Return true if the current MemTableRep supports concurrent inserts
@@ -295,6 +308,12 @@ class SkipListFactory : public MemTableRepFactory {
   virtual MemTableRep* CreateMemTableRep(const MemTableRep::KeyComparator&,
                                          Allocator*, const SliceTransform*,
                                          Logger* logger) override;
+#ifdef JELLYFISH
+  using MemTableRepFactory::CreateMemTableRep_Jelly;
+  virtual MemTableRep* CreateMemTableRep_Jelly(const MemTableRep::KeyComparator& key_cmp, 
+                                         Allocator* allocator, const SliceTransform* slice_transform,
+                                         Logger* logger);
+#endif
   virtual const char* Name() const override { return "SkipListFactory"; }
 
   bool IsInsertConcurrentlySupported() const override { return true; }

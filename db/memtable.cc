@@ -73,9 +73,15 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
               ? &mem_tracker_
               : nullptr,
           mutable_cf_options.memtable_huge_page_size),
+#ifdef JELLYFISH
+      table_(ioptions.memtable_factory->CreateMemTableRep_Jelly(
+          comparator_, &arena_, ioptions.prefix_extractor, ioptions.info_log,
+          column_family_id)),
+#else
       table_(ioptions.memtable_factory->CreateMemTableRep(
           comparator_, &arena_, ioptions.prefix_extractor, ioptions.info_log,
           column_family_id)),
+#endif
       range_del_table_(SkipListFactory().CreateMemTableRep(
           comparator_, &arena_, nullptr /* transform */, ioptions.info_log,
           column_family_id)),
