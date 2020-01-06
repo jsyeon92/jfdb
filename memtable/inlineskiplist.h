@@ -499,7 +499,7 @@ namespace rocksdb {
 #ifdef JELLYFISH
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::Seek_Chain(const char* target) {
-#if 0 
+#if 1 
 		node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
        	if(node_ != nullptr){
 			chain_ = node_->GetChain();//Get level 0 
