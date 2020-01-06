@@ -111,7 +111,7 @@ public:
 			skip_list_.Memory_Reclaim();
 		else
 			sleep(0.1);
-	//	skip_list_.Print_Trace();
+		//skip_list_.Print_Trace();
 	}
   }
 #endif
@@ -126,6 +126,8 @@ public:
 
   virtual ~SkipListRep() override {
 #ifdef JELLYFISH
+	//skip_list_.AllSkipList();
+	//skip_list_.Print_Trace();
 	t_con_.store(false);
 	if(m_thread_ != nullptr)
 		m_thread_->join();
@@ -342,14 +344,14 @@ MemTableRep* SkipListFactory::CreateMemTableRep_Jelly(
 	//std::thread t1(&SkipListRep::Memory_Reclaim_Rep, tmp, 100);
 	tmp->m_thread_ = new std::thread(&SkipListRep::Memory_Reclaim_Rep, tmp);
 	MemTableRep* tmp2 = tmp;
-	printf("Jellyfish Skiplist\n");
+	//printf("Jellyfish Skiplist\n");
 	return tmp2;
 }
 #endif
 MemTableRep* SkipListFactory::CreateMemTableRep(
     const MemTableRep::KeyComparator& compare, Allocator* allocator,
     const SliceTransform* transform, Logger* /*logger*/) {
-	printf("Concurrent Skiplist\n");
+	//printf("Concurrent Skiplist\n");
   return new SkipListRep(compare, allocator, transform, lookahead_);
 }
 

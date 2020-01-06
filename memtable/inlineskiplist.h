@@ -64,6 +64,7 @@
 #endif
 #ifdef FREESPACE
 //#define TRACE
+//#define JELLYFISH_STAT
 #define WORK_QUEUE
 using namespace moodycamel; 
 #endif
@@ -123,7 +124,6 @@ namespace rocksdb {
 		}
 #else
 		void Memory_Reclaim(){
-			//printf("[MC]Start\n");
 			Node* before = head_;
 		
 #ifdef TRACE
@@ -142,7 +142,6 @@ namespace rocksdb {
 				}
 				before = next;
 			}
-			//printf("[MC]End\n");
 		}
 #endif
 #ifdef JELLYFISH_STAT
@@ -176,28 +175,13 @@ namespace rocksdb {
 			else
 				printf("XXXXXXXX\n");
 		}
-		void GetAllSkiplist() const {
-			//std::unique_lock<std::mutex> lock(chain_mutex_);
+		void AllSkipList() {
 			Node* x = head_;
 			Node* next = x->Next(0);
-			Node* t = next->GetChain();
-			printf("\n==================================================\n");
-			while (1) {
-				printf("[OWNER]");
+			while(next != nullptr){
 				PrintKey(next->Key());
-				while (1) {
-					if (t == nullptr) break;
-					Node* chain = t;
-					printf("  [CHILD]");
-					PrintKey(chain->Key());
-					//printf("[CHILD]END\n");
-					t = chain->GetChain();
-				}
-				next = next->Next(0);
-				if (next == NULL)break;
-				t = next->GetChain();
+				next=next->Next(0);
 			}
-			printf("==================================================\n");
 		}
 #endif
 		// Create a new InlineSkipList object that will use "cmp" for comparing
@@ -865,7 +849,7 @@ namespace rocksdb {
 		InlineSkipList<Comparator>::AllocateNode(size_t key_size, int height) {
 		int i=0;
 Allocate:
-		if(free_node_queue[height].size_approx() < 3 || i > 5){
+		if(free_node_queue[height].size_approx() < 1 || i > 7){
 			auto prefix = sizeof(std::atomic<Node*>) * (height);
 			char* raw = allocator_->AllocateAligned(prefix + sizeof(Node) + key_size);
 			Node* x = reinterpret_cast<Node*>(raw + prefix);
@@ -1281,6 +1265,7 @@ Allocate:
 #endif
 		Node* nnode = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 		Node* chain_header;
+		//PrintKey(key);
 retry:
 		chain_header = curr->GetChain();//node level 0 
 
