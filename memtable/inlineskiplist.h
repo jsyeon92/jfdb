@@ -971,7 +971,6 @@ namespace rocksdb {
 			// increased it
 		}
 		assert(max_height <= kMaxPossibleHeight);
-
 		int recompute_height = 0;
 		if (splice->height_ < max_height) {
 			// Either splice has never been used or max_height has grown since
@@ -1080,6 +1079,9 @@ namespace rocksdb {
 		if (UseCAS) {
 			for (int i = 0; i < height; ++i) {
 				while (true) {
+#ifdef JELLYFISH
+					int retry=0;
+#endif
 					// Checking for duplicate keys on the level 0 is sufficient
 					if (UNLIKELY(i == 0 && splice->next_[i] != nullptr &&
 						compare_(x->Key(), splice->next_[i]->Key()) >= 0)) {
@@ -1106,6 +1108,7 @@ namespace rocksdb {
 					// been inserted between prev[i] and next[i]. No point in using
 					// next[i] as the after hint, because we know it is stale.
 #ifdef JELLYFISH
+					retry++;
 					int already_chain_node=0;
 					FindSpliceForLevel_Equal<false>(key, splice->prev_[i], nullptr, i, &splice->prev_[i],&splice->next_[i], &already_chain_node);
 #else
@@ -1117,7 +1120,8 @@ namespace rocksdb {
 						//insert chain and return;
 						if(i == 0) {
 							InsertChain_Concurrently(key, splice, 0);
-							return true;	
+							splice->height_=0;
+							return true;
 						}else{
 							printf("FAIL! FAIL! FAIL! FAIL!\n");
 						}
@@ -1209,6 +1213,22 @@ retry:
 			}
 		}
 		else {
+#if 1
+			uint64_t header_seq = GetSequenceNum(chain_header->Key());	
+			if(new_seq > header_seq){
+				nnode->SetUpdateChain(chain_header);
+				if (curr->CASUpdateChain(chain_header, nnode)) {
+					return true;
+				}
+				else {
+					nnode->InitChain();
+					goto retry;
+				}
+			}else{
+				return true;
+			}
+
+#else
 			uint64_t header_seq = GetSequenceNum(chain_header->Key());	
 			if(new_seq > header_seq){//New node insert chain list where header
 				nnode->SetUpdateChain(chain_header);
@@ -1246,6 +1266,7 @@ retry:
 					}
 				}
 			}
+#endif
 		}
 	}
 #endif

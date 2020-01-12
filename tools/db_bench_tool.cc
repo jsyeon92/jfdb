@@ -73,7 +73,7 @@
 #include "utilities/merge_operators.h"
 #include "utilities/merge_operators/bytesxor.h"
 #include "utilities/persistent_cache/block_cache_tier.h"
-
+#define PERF_CONTEXT
 #ifdef OS_WIN
 #include <io.h>  // open/close
 #endif
@@ -3562,6 +3562,9 @@ void VerifyDBFromDB(std::string& truth_db_name) {
   }
 
   void DoWrite(ThreadState* thread, WriteMode write_mode) {
+#ifdef PERF_CONTEXT
+	get_perf_context()->Reset();
+#endif
     const int test_duration = write_mode == RANDOM ? FLAGS_duration : 0;
     const int64_t num_ops = writes_ == 0 ? num_ : writes_;
 
@@ -3712,6 +3715,12 @@ void VerifyDBFromDB(std::string& truth_db_name) {
       }
     }
     thread->stats.AddBytes(bytes);
+#ifdef PERF_CONTEXT
+    if (FLAGS_perf_level > rocksdb::PerfLevel::kDisable) {
+      thread->stats.AddMessage(get_perf_context()->ToString());
+    }
+#endif
+
   }
 
   Status DoDeterministicCompact(ThreadState* thread,
@@ -4168,6 +4177,10 @@ void VerifyDBFromDB(std::string& truth_db_name) {
     Slice key = AllocateKey(&key_guard);
     PinnableSlice pinnable_val;
 
+#ifdef PERF_CONTEXT
+	get_perf_context()->Reset();
+#endif
+
     Duration duration(FLAGS_duration, reads_);
     while (!duration.Done(1)) {
       DBWithColumnFamilies* db_with_cfh = SelectDBWithCfh(thread);
@@ -4205,7 +4218,7 @@ void VerifyDBFromDB(std::string& truth_db_name) {
     }
 
     char msg[100];
-    snprintf(msg, sizeof(msg), "(%" PRIu64 " of %" PRIu64 " found)\n",
+    snprintf(msg, sizeof(msg), "(%" PRIu64 " of %" PRIu64 " found) ",
              found, read);
 
     thread->stats.AddBytes(bytes);
@@ -4289,6 +4302,10 @@ void VerifyDBFromDB(std::string& truth_db_name) {
     int64_t read = 0;
     int64_t found = 0;
     int64_t bytes = 0;
+#ifdef PERF_CONTEXT
+	get_perf_context()->Reset();
+#endif
+
     ReadOptions options(FLAGS_verify_checksum, true);
     options.tailing = FLAGS_use_tailing_iterator;
 
@@ -4364,7 +4381,7 @@ void VerifyDBFromDB(std::string& truth_db_name) {
     }
 
     char msg[100];
-    snprintf(msg, sizeof(msg), "(%" PRIu64 " of %" PRIu64 " found)\n",
+    snprintf(msg, sizeof(msg), "(%" PRIu64 " of %" PRIu64 " found) ",
              found, read);
     thread->stats.AddBytes(bytes);
     thread->stats.AddMessage(msg);
