@@ -144,7 +144,7 @@ public:
 			if(memtable_key != nullptr){
 				iter_.Seek_Chain(memtable_key);
 			}else{
-				iter_Seek_Chain(EncodeKey(&tmp_, user_key));
+				iter_.Seek_Chain(EncodeKey(&tmp_, user_key));
 			}
 		}
 #endif

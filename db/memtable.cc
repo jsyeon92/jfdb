@@ -230,7 +230,26 @@ void MemTable::UpdateOldestKeyTime() {
     }
   }
 }
+#ifdef JELLYFISH
+int MemTable::KeyComparator::operator()(const char* prefix_len_key1,
+                                        const char* prefix_len_key2, uint64_t tmp) const {
+  //printf("Compare 3\n");
+  // Internal keys are encoded as length-prefixed strings.
+  Slice k1 = GetLengthPrefixedSlice(prefix_len_key1);
+  Slice k2 = GetLengthPrefixedSlice(prefix_len_key2);
+  tmp = tmp << 1;
+  return comparator.CompareKeySeq_Jelly(k1, k2);
+}
+int MemTable::KeyComparator::operator()(const char* prefix_len_key,
+                                        const KeyComparator::DecodedType& key, uint64_t tmp) const{
 
+  // Internal keys are encoded as length-prefixed strings.
+  Slice a = GetLengthPrefixedSlice(prefix_len_key);
+  tmp=tmp << 1;
+  return comparator.CompareKeySeq_Jelly(a, key);
+}
+
+#endif
 int MemTable::KeyComparator::operator()(const char* prefix_len_key1,
                                         const char* prefix_len_key2) const {
   // Internal keys are encoded as length-prefixed strings.
@@ -372,7 +391,7 @@ class MemTableIterator : public InternalIterator {
     valid_ = iter_->Valid();
   }
 #ifdef JELLYFISH
-  void NextChain() override {
+  void NextChain() {
     PERF_COUNTER_ADD(next_on_memtable_count, 1);
     assert(Valid());
     iter_->NextChain();

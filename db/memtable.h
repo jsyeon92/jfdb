@@ -84,6 +84,13 @@ class MemTable {
   struct KeyComparator : public MemTableRep::KeyComparator {
     const InternalKeyComparator comparator;
     explicit KeyComparator(const InternalKeyComparator& c) : comparator(c) { }
+#ifdef JELLYFISH
+    virtual int operator()(const char* prefix_len_key1,
+                           const char* prefix_len_key2, uint64_t tmp) const override;
+    virtual int operator()(const char* prefix_len_key,
+                           const DecodedType& key, uint64_t tmp) const override;
+
+#endif
     virtual int operator()(const char* prefix_len_key1,
                            const char* prefix_len_key2) const override;
     virtual int operator()(const char* prefix_len_key,

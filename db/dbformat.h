@@ -26,6 +26,10 @@
 #include "util/coding.h"
 #include "util/user_comparator_wrapper.h"
 
+
+#define JELLYFISH
+
+
 namespace ROCKSDB_NAMESPACE {
 
 // The file declares data structures and functions that deal with internal
@@ -196,6 +200,9 @@ class InternalKeyComparator
   virtual int Compare(const Slice& a, const Slice& b) const override;
   // Same as Compare except that it excludes the value type from comparison
   virtual int CompareKeySeq(const Slice& a, const Slice& b) const;
+#ifdef JELLYFISH
+  virtual int CompareKeySeq_Jelly(const Slice& a, const Slice& b) const;
+#endif
   virtual void FindShortestSeparator(std::string* start,
                                      const Slice& limit) const override;
   virtual void FindShortSuccessor(std::string* key) const override;
@@ -654,7 +661,18 @@ inline int InternalKeyComparator::CompareKeySeq(const Slice& akey,
   }
   return r;
 }
+#ifdef JELLYFISH
+inline
+int InternalKeyComparator::CompareKeySeq_Jelly(const Slice& akey,
+                                         const Slice& bkey) const {
+  // Order by:
+  //    increasing user key (according to user-supplied comparator)
+  //    decreasing sequence number
+  int r = user_comparator_.Compare(ExtractUserKey(akey), ExtractUserKey(bkey));
+  return r;
+}
 
+#endif
 // Wrap InternalKeyComparator as a comparator class for ParsedInternalKey.
 struct ParsedInternalKeyComparator {
   explicit ParsedInternalKeyComparator(const InternalKeyComparator* c)

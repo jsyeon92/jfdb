@@ -71,6 +71,9 @@ class MemTableRep {
 #ifdef JELLYFISH
 		virtual int operator()(const char* prefix_len_key1,
 						   const char* prefix_len_key2, uint64_t tmp)const=0;
+	  virtual int operator()(const char* prefix_len_key,
+                           const Slice& key, uint64_t tmp) const = 0;
+
 #endif
 
     // Compare a and b. Return a negative value if a is less than b, 0 if they

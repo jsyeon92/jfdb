@@ -57,7 +57,7 @@
 
 #ifdef JELLYFISH
 #include "util/coding.h"
-#include "<cstdint>"
+#include <cstdint>
 #endif
 
 namespace ROCKSDB_NAMESPACE {
