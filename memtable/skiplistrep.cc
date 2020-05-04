@@ -76,7 +76,16 @@ public:
    // All memory is allocated through allocator; nothing to report here
    return 0;
  }
-
+#ifdef JELLYFISH
+ void Get(const LookupKey& k, void* callback_args,
+          bool (*callback_func)(void* arg, const char* entry)) override {
+   SkipListRep::Iterator iter(&skip_list_);
+   Slice dummy_slice;
+   for (iter.Seek_Chain(dummy_slice, k.memtable_key().data());
+        iter.Valid() && callback_func(callback_args, iter.key()); iter.Next()) {
+   }
+ }
+#else
  void Get(const LookupKey& k, void* callback_args,
           bool (*callback_func)(void* arg, const char* entry)) override {
    SkipListRep::Iterator iter(&skip_list_);
@@ -85,7 +94,7 @@ public:
         iter.Valid() && callback_func(callback_args, iter.key()); iter.Next()) {
    }
  }
-
+#endif
   uint64_t ApproximateNumEntries(const Slice& start_ikey,
                                  const Slice& end_ikey) override {
     std::string tmp;
@@ -119,11 +128,26 @@ public:
 
     // Advances to the next position.
     // REQUIRES: Valid()
+#ifdef JELLYFISH
+		void NextChain(){
+			iter_.NextChain();
+		}
+#endif
     void Next() override { iter_.Next(); }
 
     // Advances to the previous position.
     // REQUIRES: Valid()
     void Prev() override { iter_.Prev(); }
+
+#ifdef JELLYFISH
+		void Seek_Chain(const Slice& user_key, const char* memtable_key){
+			if(memtable_key != nullptr){
+				iter_.Seek_Chain(memtable_key);
+			}else{
+				iter_Seek_Chain(EncodeKey(&tmp_, user_key));
+			}
+		}
+#endif
 
     // Advance to the first entry with a key >= target
     void Seek(const Slice& user_key, const char* memtable_key) override {

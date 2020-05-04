@@ -53,6 +53,13 @@
 #include "util/coding.h"
 #include "util/random.h"
 
+#define JELLYFISH
+
+#ifdef JELLYFISH
+#include "util/coding.h"
+#include "<cstdint>"
+#endif
+
 namespace ROCKSDB_NAMESPACE {
 
 template <class Comparator>
@@ -95,6 +102,9 @@ class InlineSkipList {
   // REQUIRES: nothing that compares equal to key is currently in the list.
   // REQUIRES: no concurrent calls to any of inserts.
   bool Insert(const char* key);
+#ifdef JELLYFISH
+  bool InsertChain_Concurrently(const char* key, const Splice* splice, int fl);
+#endif
 
   // Inserts a key allocated by AllocateKey with a hint of last insert
   // position in the skip-list. If hint points to nullptr, a new hint will be
@@ -163,6 +173,10 @@ class InlineSkipList {
     // REQUIRES: Valid()
     const char* key() const;
 
+#ifdef JELLYFISH
+	void NextChain();
+#endif
+
     // Advances to the next position.
     // REQUIRES: Valid()
     void Next();
@@ -173,6 +187,10 @@ class InlineSkipList {
 
     // Advance to the first entry with a key >= target
     void Seek(const char* target);
+
+#ifdef JELLYFISH
+	void Seek_Chain(const char* target);
+#endif
 
     // Retreat to the last entry with a key <= target
     void SeekForPrev(const char* target);
@@ -189,6 +207,10 @@ class InlineSkipList {
     const InlineSkipList* list_;
     Node* node_;
     // Intentionally copyable
+#ifdef JELLYFISH
+	Node* chain_;
+#endif
+
   };
 
  private:
@@ -226,10 +248,22 @@ class InlineSkipList {
     return (compare_(a, b) < 0);
   }
 
+#ifdef JELLYFISH
+  static inline uint64_t GetSequenceNum(const char* internal_key) {
+	Slice akey = GetLengthPrefixedSlice(internal_key);
+	const uint64_t anum = DecodeFixed64(akey.data() + akey.size() - 8) >> 8;
+	return anum;
+  }
+#endif
+
   // Return true if key is greater than the data stored in "n".  Null n
   // is considered infinite.  n should not be head_.
   bool KeyIsAfterNode(const char* key, Node* n) const;
   bool KeyIsAfterNode(const DecodedKey& key, Node* n) const;
+
+#ifdef JELLYFISH
+	bool KeyIsAfterNode_Equal(const char* key, Node* n, int* insert_chain) const;
+#endif
 
   // Returns the earliest node with a key >= key.
   // Return nullptr if there is no such node.
@@ -252,6 +286,12 @@ class InlineSkipList {
   // Return head_ if list is empty.
   Node* FindLast() const;
 
+#ifdef JELLYFISH
+	template<bool prefetch_before>
+	void FindSpliceForLevel_Equal(const char* key, Node* before, Node* after, int level,
+		Node** out_prev, Node** out_next, int* insert_chain);
+#endif
+
   // Traverses a single level of the list, setting *out_prev to the last
   // node before the key and *out_next to the first node after. Assumes
   // that the key is not present in the skip list. On entry, before should
@@ -261,6 +301,11 @@ class InlineSkipList {
   template<bool prefetch_before>
   void FindSpliceForLevel(const DecodedKey& key, Node* before, Node* after, int level,
                           Node** out_prev, Node** out_next);
+
+#ifdef JELLYFISH
+	int RecomputeSpliceLevels_Equal(const char* key, Splice* splice,
+			int recompute_level);
+#endif
 
   // Recomputes Splice levels from highest_level (inclusive) down to
   // lowest_level (inclusive).
@@ -305,6 +350,21 @@ struct InlineSkipList<Comparator>::Node {
     return rv;
   }
 
+#ifdef JELLYFISH
+	void InitChain(){
+		next_[0].store(nullptr, std::memory_order_acquire);
+	}
+	Node* GetChain() const {
+		return next_[0].load(std::memory_order_acquire);
+	}
+	void SetUpdateChain(Node* x) {
+		next_[0].store(x, std::memory_order_release);
+	}
+	bool CASUpdateChain(Node* expected, Node* x) {
+		return next_[0].compare_exchange_strong(expected, x);
+	}
+#endif
+
   const char* Key() const { return reinterpret_cast<const char*>(&next_[1]); }
 
   // Accessors/mutators for links.  Wrapped in methods so we can add
@@ -314,30 +374,30 @@ struct InlineSkipList<Comparator>::Node {
     assert(n >= 0);
     // Use an 'acquire load' so that we observe a fully initialized
     // version of the returned Node.
-    return ((&next_[0] - n)->load(std::memory_order_acquire));
+    return ((&next_[0] - n -1)->load(std::memory_order_acquire));
   }
 
   void SetNext(int n, Node* x) {
     assert(n >= 0);
     // Use a 'release store' so that anybody who reads through this
     // pointer observes a fully initialized version of the inserted node.
-    (&next_[0] - n)->store(x, std::memory_order_release);
+    (&next_[0] - n -1)->store(x, std::memory_order_release);
   }
 
   bool CASNext(int n, Node* expected, Node* x) {
     assert(n >= 0);
-    return (&next_[0] - n)->compare_exchange_strong(expected, x);
+    return (&next_[0] - n -1)->compare_exchange_strong(expected, x);
   }
 
   // No-barrier variants that can be safely used in a few locations.
   Node* NoBarrier_Next(int n) {
     assert(n >= 0);
-    return (&next_[0] - n)->load(std::memory_order_relaxed);
+    return (&next_[0] - n -1)->load(std::memory_order_relaxed);
   }
 
   void NoBarrier_SetNext(int n, Node* x) {
     assert(n >= 0);
-    (&next_[0] - n)->store(x, std::memory_order_relaxed);
+    (&next_[0] - n -1)->store(x, std::memory_order_relaxed);
   }
 
   // Insert node after prev on specific level.
@@ -365,41 +425,123 @@ inline void InlineSkipList<Comparator>::Iterator::SetList(
     const InlineSkipList* list) {
   list_ = list;
   node_ = nullptr;
+#ifdef JELLYFISH
+	chain_ = nullptr;
+#endif
 }
 
 template <class Comparator>
 inline bool InlineSkipList<Comparator>::Iterator::Valid() const {
   return node_ != nullptr;
 }
-
+#ifdef JELLYFISH
 template <class Comparator>
 inline const char* InlineSkipList<Comparator>::Iterator::key() const {
   assert(Valid());
-  return node_->Key();
+	if (chain_ == nullptr)
+		return node_->Key();
+	else
+	  return node_->Key();
 }
 
 template <class Comparator>
 inline void InlineSkipList<Comparator>::Iterator::Next() {
   assert(Valid());
   node_ = node_->Next(0);
+	if(node_ != nullptr){
+		chain_ = node_->GetChain();
+	}else{
+		chain_=nullptr;
+	}
+}
+
+template <class Comparator>
+inline void InlineSkipList<Comparator>::Iterator::NextChain() {
+		chain_ = chain_->GetChain();
 }
 
 template <class Comparator>
 inline void InlineSkipList<Comparator>::Iterator::Prev() {
-  // Instead of using explicit "prev" links, we just search for the
-  // last node that falls before key.
-  assert(Valid());
-  node_ = list_->FindLessThan(node_->Key());
-  if (node_ == list_->head_) {
-    node_ = nullptr;
-  }
+		// Instead of using explicit "prev" links, we just search for the
+		// last node that falls before key.
+	assert(Valid());
+	node_ = list_->FindLessThan(node_->Key());
+	if (node_ == list_->head_) {
+		node_ = nullptr;
+		chain_= nullptr;
+		return;
+	}
+	Node* t = node_->GetChain();
+	if (t == nullptr) {
+		chain_ = nullptr;
+	}
+	else {
+		while (t != nullptr) {
+			chain_ = t;
+			t = t->GetChain();
+		}
+	}
+}
+
+#endif
+#ifdef JELLYFISH
+template <class Comparator>
+inline void InlineSkipList<Comparator>::Iterator::Seek_Chain(const char* target) {
+#if 1 
+	node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+ 	if(node_ != nullptr){
+		chain_ = node_->GetChain();//Get level 0 
+	}
+#else
+		node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+       	if(node_ != nullptr){
+			chain_ = node_->GetChain();//Get level 0 
+			if(chain_ == nullptr)
+				return ;
+			else{
+				uint64_t seek_seq = GetSequenceNum(target);
+				while(chain_ != nullptr){
+					uint64_t chain_seq = GetSequenceNum(chain_->Key());
+					if(seek_seq >= chain_seq)
+						return ;
+					else
+						chain_=chain_->GetChain();
+				}
+				printf("SEEK FAIL\n");
+			}
+		}
+	
+#endif
 }
 
 template <class Comparator>
 inline void InlineSkipList<Comparator>::Iterator::Seek(const char* target) {
-  node_ = list_->FindGreaterOrEqual(target);
+#if 0
+		node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+       	if(node_ != nullptr){
+			chain_ = node_->GetChain();//Get level 0 
+		}
+#else
+	node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
+ 	if(node_ != nullptr){
+		chain_ = node_->GetChain();//Get level 0 
+		if(chain_ == nullptr)
+				return ;
+		else{
+			uint64_t seek_seq = GetSequenceNum(target);
+			while(chain_ != nullptr){
+				uint64_t chain_seq = GetSequenceNum(chain_->Key());
+				if(seek_seq >= chain_seq)
+					return ;
+				else
+					chain_=chain_->GetChain();
+			}
+			printf("SEEK FAIL\n");
+		}
+	}	
+#endif
 }
-
+#endif
 template <class Comparator>
 inline void InlineSkipList<Comparator>::Iterator::SeekForPrev(
     const char* target) {
@@ -411,20 +553,39 @@ inline void InlineSkipList<Comparator>::Iterator::SeekForPrev(
     Prev();
   }
 }
-
+#ifdef JELLYFISH
 template <class Comparator>
 inline void InlineSkipList<Comparator>::Iterator::SeekToFirst() {
-  node_ = list_->head_->Next(0);
+	node_ = list_->head_->Next(0);
+	Node* t = node_->GetChain();
+	if (t == nullptr) {
+		chain_ = nullptr;
+	}
+	else {
+		chain_ = t;
+	}
 }
 
 template <class Comparator>
 inline void InlineSkipList<Comparator>::Iterator::SeekToLast() {
-  node_ = list_->FindLast();
-  if (node_ == list_->head_) {
-    node_ = nullptr;
-  }
+	node_ = list_->FindLast();
+	if (node_ == list_->head_) {
+		node_ = nullptr;
+		chain_=nullptr;
+		return ;
+	}
+	Node* t = node_->GetChain();
+	if (t == nullptr) {
+		chain_ = nullptr;
+	}
+	else {
+		while (t != nullptr) {
+			chain_ = t;
+			t = t->GetChain();
+		}
+	}
 }
-
+#endif
 template <class Comparator>
 int InlineSkipList<Comparator>::RandomHeight() {
   auto rnd = Random::GetTLSInstance();
@@ -440,6 +601,18 @@ int InlineSkipList<Comparator>::RandomHeight() {
   assert(height <= kMaxPossibleHeight);
   return height;
 }
+#ifdef JELLYFISH
+template <class Comparator>
+bool InlineSkipList<Comparator>::KeyIsAfterNode_Equal(const char* key,
+	Node* n, int* insert_chain) const {
+	assert(n != head_);
+	int cmp = compare_(n->Key(), key, (uint64_t)1);
+	if(cmp == 0){
+		*insert_chain=1;
+	}
+	return (n != nullptr) && cmp < 0;
+}
+#endif
 
 template <class Comparator>
 bool InlineSkipList<Comparator>::KeyIsAfterNode(const char* key,
@@ -478,9 +651,11 @@ InlineSkipList<Comparator>::FindGreaterOrEqual(const char* key) const {
     assert(x == head_ || next == nullptr || KeyIsAfterNode(next->Key(), x));
     // Make sure we haven't overshot during our search
     assert(x == head_ || KeyIsAfterNode(key_decoded, x));
+#ifdef JELLYFISH
     int cmp = (next == nullptr || next == last_bigger)
                   ? 1
-                  : compare_(next->Key(), key_decoded);
+                  : compare_(next->Key(), key_decoded, (uint64_t)1);
+#endif
     if (cmp == 0 || (cmp > 0 && level == 0)) {
       return next;
     } else if (cmp < 0) {
@@ -617,7 +792,9 @@ char* InlineSkipList<Comparator>::AllocateKey(size_t key_size) {
 template <class Comparator>
 typename InlineSkipList<Comparator>::Node*
 InlineSkipList<Comparator>::AllocateNode(size_t key_size, int height) {
-  auto prefix = sizeof(std::atomic<Node*>) * (height - 1);
+#ifdef JELLYFISH
+  auto prefix = sizeof(std::atomic<Node*>) * (height);
+#endif
 
   // prefix is space for the height - 1 pointers that we store before
   // the Node instance (next_[-(height - 1) .. -1]).  Node starts at
@@ -635,6 +812,9 @@ InlineSkipList<Comparator>::AllocateNode(size_t key_size, int height) {
   // using the pointers at the moment, StashHeight temporarily borrow
   // storage from next_[0] for that purpose.
   x->StashHeight(height);
+#ifdef JELLYFISH
+	x->InitChain();
+#endif
   return x;
 }
 
@@ -700,6 +880,36 @@ bool InlineSkipList<Comparator>::InsertWithHintConcurrently(const char* key,
   }
   return Insert<true>(key, splice, true);
 }
+#ifdef JELLYFISH
+template <class Comparator>
+template <bool prefetch_before>
+void InlineSkipList<Comparator>::FindSpliceForLevel_Equal(const char* key,
+	Node* before, Node* after,
+	int level, Node** out_prev,
+	Node** out_next, int* insert_chain) {
+	while (true) {
+		Node* next = before->Next(level);
+		if (next != nullptr) {
+			PREFETCH(next->Next(level), 0, 1);
+		}
+		if (prefetch_before == true) {
+			if (next != nullptr && level>0) {
+				PREFETCH(next->Next(level - 1), 0, 1);
+			}
+		}
+		assert(before == head_ || next == nullptr ||
+			KeyIsAfterNode(next->Key(), before));
+		assert(before == head_ || KeyIsAfterNode(key, before));
+		if (next == after || !KeyIsAfterNode_Equal(key, next, insert_chain)) {
+			// found it
+			*out_prev = before;
+			*out_next = next;
+			return;
+		}
+		before = next;
+	}
+}
+#endif
 
 template <class Comparator>
 template <bool prefetch_before>
@@ -729,6 +939,28 @@ void InlineSkipList<Comparator>::FindSpliceForLevel(const DecodedKey& key,
     before = next;
   }
 }
+
+#ifdef JELLYFISH
+	template <class Comparator>
+	int InlineSkipList<Comparator>::RecomputeSpliceLevels_Equal(const char* key,
+		Splice* splice,
+		int recompute_level) {
+		assert(recompute_level > 0);
+		assert(recompute_level <= splice->height_);
+		int i=0;
+		int insert_chain=0;
+		for (i = recompute_level - 1; i >= 0; --i) {
+			FindSpliceForLevel_Equal<true>(key, splice->prev_[i + 1], splice->next_[i + 1], i,
+				&splice->prev_[i], &splice->next_[i], &insert_chain);
+
+				if(insert_chain){
+					return i;
+				}
+
+		}
+		return -1;
+	}
+#endif
 
 template <class Comparator>
 void InlineSkipList<Comparator>::RecomputeSpliceLevels(const DecodedKey& key,
@@ -846,14 +1078,32 @@ bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
     }
   }
   assert(recompute_height <= max_height);
-  if (recompute_height > 0) {
-    RecomputeSpliceLevels(key_decoded, splice, recompute_height);
-  }
+#ifdef JELLYFISH
+		int rv=-1;
+#endif
+		if (recompute_height > 0) {
+#ifdef JELLYFISH
+			rv=RecomputeSpliceLevels_Equal(key, splice, recompute_height);
+#else
+			RecomputeSpliceLevels(key, splice, recompute_height);
+#endif
+		}
+#ifdef JELLYFISH
+		if(rv >=0){
+			InsertChain_Concurrently(key, splice, rv);
+			splice->height_=0;		
+			return true;
+		}
+#endif
 
   bool splice_is_valid = true;
   if (UseCAS) {
     for (int i = 0; i < height; ++i) {
       while (true) {
+#ifdef JELLYFISH
+				int retry=0;
+#endif
+
         // Checking for duplicate keys on the level 0 is sufficient
         if (UNLIKELY(i == 0 && splice->next_[i] != nullptr &&
                      compare_(x->Key(), splice->next_[i]->Key()) >= 0)) {
@@ -879,8 +1129,26 @@ bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
         // search, because it should be unlikely that lots of nodes have
         // been inserted between prev[i] and next[i]. No point in using
         // next[i] as the after hint, because we know it is stale.
-        FindSpliceForLevel<false>(key_decoded, splice->prev_[i], nullptr, i,
-                                  &splice->prev_[i], &splice->next_[i]);
+#ifdef JELLYFISH
+					retry++;
+					int already_chain_node=0;
+					FindSpliceForLevel_Equal<false>(key, splice->prev_[i], nullptr, i, &splice->prev_[i],&splice->next_[i], &already_chain_node);
+#else
+					FindSpliceForLevel<false>(key, splice->prev_[i], nullptr, i, &splice->prev_[i],
+						&splice->next_[i]);
+#endif
+#ifdef JELLYFISH
+					if(already_chain_node == 1){
+						//insert chain and return;
+						if(i == 0) {
+							InsertChain_Concurrently(key, splice, 0);
+							splice->height_=0;
+							return true;
+						}else{
+							printf("FAIL! FAIL! FAIL! FAIL!\n");
+						}
+					}
+#endif	
 
         // Since we've narrowed the bracket for level i, we might have
         // violated the Splice constraint between i and i-1.  Make sure
@@ -942,6 +1210,85 @@ bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
   }
   return true;
 }
+#ifdef JELLYFISH
+template <class Comparator>
+bool InlineSkipList<Comparator>::InsertChain_Concurrently(const char * key, const Splice* splice, int fl) {
+	Node* curr = splice->next_[fl];
+	Node* nnode = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
+	Node* chain_header;
+	uint64_t new_seq = GetSequenceNum(key);
+
+retry:
+		chain_header = curr->GetChain();//node level 0 
+		if (chain_header == nullptr) {
+			uint64_t node_seq = GetSequenceNum(curr->Key()); 
+			if(new_seq > node_seq){
+				if (curr->CASUpdateChain(nullptr, nnode)) {
+					return true;
+				}else
+					goto retry;
+			}else{
+				return true;
+			}
+		}
+		else {
+#if 1
+			uint64_t header_seq = GetSequenceNum(chain_header->Key());	
+			if(new_seq > header_seq){
+				nnode->SetUpdateChain(chain_header);
+				if (curr->CASUpdateChain(chain_header, nnode)) {
+					return true;
+				}
+				else {
+					nnode->InitChain();
+					goto retry;
+				}
+			}else{
+				return true;
+			}
+
+#else
+			uint64_t header_seq = GetSequenceNum(chain_header->Key());	
+			if(new_seq > header_seq){//New node insert chain list where header
+				nnode->SetUpdateChain(chain_header);
+				if (curr->CASUpdateChain(chain_header, nnode)) {
+					return true;
+				}
+				else {
+					nnode->InitChain();
+					goto retry;
+				}
+			}else{
+				Node* next_chain = chain_header->GetChain();
+				while(true){
+					if(next_chain == nullptr){
+						if(chain_header->CASUpdateChain(nullptr, nnode))
+							return true;
+						else
+							goto retry;
+					}else{
+						uint64_t next_seq = GetSequenceNum(next_chain->Key());
+						if(new_seq > next_seq){
+							nnode->SetUpdateChain(next_chain);
+							if(chain_header->CASUpdateChain(next_chain, nnode))
+								return true;
+							else
+								goto retry;
+						}else{
+							chain_header = next_chain;
+							Node* tmp_chain = next_chain->GetChain();	
+							if(tmp_chain != nullptr)
+								next_chain = next_chain;
+							else	
+								next_chain = nullptr;
+						}
+					}
+				}
+			}
+#endif
+		}
+	}
+#endif
 
 template <class Comparator>
 bool InlineSkipList<Comparator>::Contains(const char* key) const {

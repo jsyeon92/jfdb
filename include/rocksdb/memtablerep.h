@@ -41,6 +41,7 @@
 #include <memory>
 #include <stdexcept>
 
+#define JELLYFISH
 namespace ROCKSDB_NAMESPACE {
 
 class Arena;
@@ -66,6 +67,11 @@ class MemTableRep {
       // contract. Refer to MemTable::Add for details.
       return GetLengthPrefixedSlice(key);
     }
+
+#ifdef JELLYFISH
+		virtual int operator()(const char* prefix_len_key1,
+						   const char* prefix_len_key2, uint64_t tmp)const=0;
+#endif
 
     // Compare a and b. Return a negative value if a is less than b, 0 if they
     // are equal, and a positive value if a is greater than b
@@ -218,6 +224,10 @@ class MemTableRep {
     // Advances to the next position.
     // REQUIRES: Valid()
     virtual void Next() = 0;
+
+#ifdef JELLYFISH
+    virtual void NextChain() { Next(); }
+#endif
 
     // Advances to the previous position.
     // REQUIRES: Valid()

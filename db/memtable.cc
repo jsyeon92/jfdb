@@ -371,6 +371,15 @@ class MemTableIterator : public InternalIterator {
     iter_->SeekToLast();
     valid_ = iter_->Valid();
   }
+#ifdef JELLYFISH
+  void NextChain() override {
+    PERF_COUNTER_ADD(next_on_memtable_count, 1);
+    assert(Valid());
+    iter_->NextChain();
+    valid_ = iter_->Valid();
+  }
+
+#endif
   void Next() override {
     PERF_COUNTER_ADD(next_on_memtable_count, 1);
     assert(Valid());
