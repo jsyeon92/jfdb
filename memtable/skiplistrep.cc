@@ -27,6 +27,16 @@ public:
        transform_(transform),
        lookahead_(lookahead) {}
 
+#ifdef JELLYFISH_BLOOM
+ explicit SkipListRep(const MemTableRep::KeyComparator& compare,
+                      Allocator* allocator, const SliceTransform* transform,
+                      const size_t lookahead, size_t wbs)
+     : MemTableRep(allocator),
+       skip_list_(compare, allocator, wbs),
+       cmp_(compare),
+       transform_(transform),
+       lookahead_(lookahead) {}
+#endif
 
  virtual KeyHandle Allocate(const size_t len, char** buf) override {
    *buf = skip_list_.AllocateKey(len);
@@ -39,6 +49,12 @@ public:
     skip_list_.Insert(static_cast<char*>(handle));
   }
 
+#ifdef JELLY_BLOOM
+  virtual bool InsertKey(KeyHandle handle, bool const may_contain) override {
+    return skip_list_.Insert(static_cast<char*>(handle), may_contain);
+  }
+#endif
+
   virtual bool InsertKey(KeyHandle handle) override {
     return skip_list_.Insert(static_cast<char*>(handle));
   }
@@ -50,10 +66,15 @@ public:
   virtual bool InsertKeyWithHint(KeyHandle handle, void** hint) override {
     return skip_list_.InsertWithHint(static_cast<char*>(handle), hint);
   }
-
   virtual void InsertConcurrently(KeyHandle handle) override {
     skip_list_.InsertConcurrently(static_cast<char*>(handle));
   }
+
+#ifdef JELLY_BLOOM
+	virtual void InsertConcurrently(KeyHandle handle bool const may_contain) override {
+    skip_list_.InsertConcurrently(static_cast<char*>(handle), may_contain);
+  }
+#endif
 
   virtual bool InsertKeyConcurrently(KeyHandle handle) override {
     return skip_list_.InsertConcurrently(static_cast<char*>(handle));
@@ -313,6 +334,14 @@ public:
   }
 };
 }
+#ifdef JELLYFISH_BLOOM
+MemTableRep* SkipListFactory::CreateMemTableRep(
+    const MemTableRep::KeyComparator& compare, Allocator* allocator,
+    const SliceTransform* transform, Logger* /*logger*/, size_t wbs) {
+
+  return new SkipListRep(compare, allocator, transform, lookahead_, wbs);
+}
+#endif
 
 MemTableRep* SkipListFactory::CreateMemTableRep(
     const MemTableRep::KeyComparator& compare, Allocator* allocator,

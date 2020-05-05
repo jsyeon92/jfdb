@@ -29,7 +29,16 @@ uint32_t GetTotalBitsForLocality(uint32_t total_bits) {
   return num_blocks * (CACHE_LINE_SIZE * 8);
 }
 }
+#ifdef JELLY_BLOOM
+DynamicBloom::DynamicBloom(uint32_t total_bits,
+                           uint32_t locality, uint32_t num_probes,
+                           uint32_t (*hash_func)(const Slice& key)
+                           )
+    : DynamicBloom(num_probes, hash_func) {
+  SetTotalBits(total_bits, locality);
+}
 
+#endif
 DynamicBloom::DynamicBloom(Allocator* allocator, uint32_t total_bits,
                            uint32_t locality, uint32_t num_probes,
                            uint32_t (*hash_func)(const Slice& key),
@@ -53,7 +62,31 @@ void DynamicBloom::SetRawData(unsigned char* raw_data, uint32_t total_bits,
   kTotalBits = total_bits;
   kNumBlocks = num_blocks;
 }
+#ifdef JELLY_BLOOM
+void DynamicBloom::SetTotalBits(uint32_t total_bits, uint32_t locality) {
+  kTotalBits = (locality > 0) ? GetTotalBitsForLocality(total_bits)
+                              : (total_bits + 7) / 8 * 8;
+  kNumBlocks = (locality > 0) ? (kTotalBits / (CACHE_LINE_SIZE * 8)) : 0;
 
+  assert(kNumBlocks > 0 || kTotalBits > 0);
+  assert(kNumProbes > 0);
+
+  uint32_t sz = kTotalBits / 8;
+  if (kNumBlocks > 0) {
+    sz += CACHE_LINE_SIZE - 1;
+  }
+  assert(allocator);
+
+  char* raw = new char[sz];
+  memset(raw, 0, sz);
+  auto cache_line_offset = reinterpret_cast<uintptr_t>(raw) % CACHE_LINE_SIZE;
+  if (kNumBlocks > 0 && cache_line_offset > 0) {
+    raw += CACHE_LINE_SIZE - cache_line_offset;
+  }
+  data_ = reinterpret_cast<std::atomic<uint8_t>*>(raw);
+}
+
+#endif
 void DynamicBloom::SetTotalBits(Allocator* allocator,
                                 uint32_t total_bits, uint32_t locality,
                                 size_t huge_page_tlb_size,

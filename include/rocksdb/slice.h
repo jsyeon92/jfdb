@@ -27,6 +27,8 @@
 
 #include "rocksdb/cleanable.h"
 
+
+#define JELLY_BLOOM
 namespace rocksdb {
 
 class Slice {

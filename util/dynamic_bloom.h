@@ -13,7 +13,7 @@
 
 #include <atomic>
 #include <memory>
-
+#define JELLY_BLOOM
 namespace rocksdb {
 
 class Slice;
@@ -32,6 +32,12 @@ class DynamicBloom {
   //                      it to be allocated, like:
   //                         sysctl -w vm.nr_hugepages=20
   //                     See linux doc Documentation/vm/hugetlbpage.txt
+#ifdef JELLY_BLOOM
+  explicit DynamicBloom(uint32_t total_bits, uint32_t locality = 0,
+                        uint32_t num_probes = 6,
+                        uint32_t (*hash_func)(const Slice& key) = nullptr
+                        );
+#endif
   explicit DynamicBloom(Allocator* allocator,
                         uint32_t total_bits, uint32_t locality = 0,
                         uint32_t num_probes = 6,
@@ -41,7 +47,10 @@ class DynamicBloom {
 
   explicit DynamicBloom(uint32_t num_probes = 6,
                         uint32_t (*hash_func)(const Slice& key) = nullptr);
+#ifdef JELLY_BLOOM
+  void SetTotalBits(uint32_t total_bits, uint32_t locality);
 
+#endif
   void SetTotalBits(Allocator* allocator, uint32_t total_bits,
                     uint32_t locality, size_t huge_page_tlb_size,
                     Logger* logger);

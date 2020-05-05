@@ -37,6 +37,8 @@
 #include "util/murmurhash.h"
 #include "util/mutexlock.h"
 
+#define JELLY_BLOOM_RATIO 0.01
+#define JELLY_PREFIX 16
 namespace rocksdb {
 
 ImmutableMemTableOptions::ImmutableMemTableOptions(
@@ -73,9 +75,16 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
               ? &mem_tracker_
               : nullptr,
           mutable_cf_options.memtable_huge_page_size),
+#ifdef JELLYFISH_BLOOM
+	table_(ioptions.memtable_factory->CreateMemTableRep(
+          comparator_, &arena_, ioptions.prefix_extractor, ioptions.info_log,
+          column_family_id, mutable_cf_options.write_buffer_size)),
+
+#else
       table_(ioptions.memtable_factory->CreateMemTableRep(
           comparator_, &arena_, ioptions.prefix_extractor, ioptions.info_log,
           column_family_id)),
+#endif
       range_del_table_(SkipListFactory().CreateMemTableRep(
           comparator_, &arena_, nullptr /* transform */, ioptions.info_log,
           column_family_id)),
@@ -96,6 +105,9 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
                  ? moptions_.inplace_update_num_locks
                  : 0),
       prefix_extractor_(ioptions.prefix_extractor),
+#ifdef JELLY_BLOOM
+			jelly_extractor_(rocksdb::NewFixedPrefixTransform((size_t)JELLY_PREFIX)),
+#endif
       flush_state_(FLUSH_NOT_REQUESTED),
       env_(ioptions.env),
       insert_with_hint_prefix_extractor_(
@@ -111,6 +123,9 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
         6 /* hard coded 6 probes */, nullptr, moptions_.memtable_huge_page_size,
         ioptions.info_log));
   }
+#ifdef JELLY_BLOOM
+		jelly_bloom_.reset(new DynamicBloom(static_cast<uint32_t>(static_cast<double>(mutable_cf_options.write_buffer_size) * JELLY_BLOOM_RATIO) *  8u, 0u));
+#endif
 }
 
 MemTable::~MemTable() {
@@ -502,6 +517,9 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
   p = EncodeVarint32(p, val_size);
   memcpy(p, value.data(), val_size);
   assert((unsigned)(p + val_size - buf) == (unsigned)encoded_len);
+#ifdef JELLY_BLOOM
+  bool const may_contain = jelly_bloom_->MayContain(jelly_extractor_->Transform(key));//if found,set 1
+#endif
   if (!allow_concurrent) {
     // Extract prefix for insert with hint.
     if (insert_with_hint_prefix_extractor_ != nullptr &&
@@ -512,7 +530,11 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
         return res;
       }
     } else {
+#ifdef JELLY_BLOOM
+			bool res = table->InsertKey(handle, may_contain);
+#else
       bool res = table->InsertKey(handle);
+#endif
       if (UNLIKELY(!res)) {
         return res;
       }
@@ -533,7 +555,9 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
       assert(prefix_extractor_);
       prefix_bloom_->Add(prefix_extractor_->Transform(key));
     }
-
+#ifdef JELLY_BLOOM
+		jelly_bloom_->Add(jelly_extractor_->Transform(key));
+#endif
     // The first sequence number inserted into the memtable
     assert(first_seqno_ == 0 || s >= first_seqno_);
     if (first_seqno_ == 0) {
@@ -548,7 +572,11 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
     assert(post_process_info == nullptr);
     UpdateFlushState();
   } else {
+#ifdef JELLY_BLOOM
+		bool res = table->InsertKeyConcurrently(handle, may_contain);
+#else
     bool res = table->InsertKeyConcurrently(handle);
+#endif
     if (UNLIKELY(!res)) {
       return res;
     }
@@ -564,7 +592,9 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
       assert(prefix_extractor_);
       prefix_bloom_->AddConcurrently(prefix_extractor_->Transform(key));
     }
-
+#ifdef JELLY_BLOOM
+		jelly_bloom_->AddConcurrently(jelly_extractor_->Transform(key));
+#endif
     // atomically update first_seqno_ and earliest_seqno_.
     uint64_t cur_seq_num = first_seqno_.load(std::memory_order_relaxed);
     while ((cur_seq_num == 0 || s < cur_seq_num) &&

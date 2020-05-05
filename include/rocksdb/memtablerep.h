@@ -41,6 +41,7 @@
 #include <stdlib.h>
 #include <rocksdb/slice.h>
 #define JELLYFISH
+#define JELLYFISH_BLOOM
 namespace rocksdb {
 
 class Arena;
@@ -263,6 +264,21 @@ class MemTableRepFactory {
       uint32_t /* column_family_id */) {
     return CreateMemTableRep(key_cmp, allocator, slice_transform, logger);
   }
+#ifdef JELLYFISH_BLOOM
+  virtual MemTableRep* CreateMemTableRep(
+      const MemTableRep::KeyComparator& key_cmp, Allocator* allocator,
+      const SliceTransform* slice_transform, Logger* logger,
+      size_t ) {
+    return CreateMemTableRep(key_cmp, allocator, slice_transform, logger);
+  }
+
+  virtual MemTableRep* CreateMemTableRep(
+      const MemTableRep::KeyComparator& key_cmp, Allocator* allocator,
+      const SliceTransform* slice_transform, Logger* logger,
+      uint32_t /* column_family_id */, size_t wbs) {
+    return CreateMemTableRep(key_cmp, allocator, slice_transform, logger, wbs);
+  }
+#endif
 
   virtual const char* Name() const = 0;
 
@@ -292,6 +308,11 @@ class SkipListFactory : public MemTableRepFactory {
   virtual MemTableRep* CreateMemTableRep(const MemTableRep::KeyComparator&,
                                          Allocator*, const SliceTransform*,
                                          Logger* logger) override;
+#ifdef JELLYFISH_BLOOM
+  virtual MemTableRep* CreateMemTableRep(const MemTableRep::KeyComparator&,
+                                         Allocator*, const SliceTransform*,
+                                         Logger* logger, size_t wbs) override;
+#endif
   virtual const char* Name() const override { return "SkipListFactory"; }
 
   bool IsInsertConcurrentlySupported() const override { return true; }

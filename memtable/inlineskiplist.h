@@ -51,16 +51,25 @@
 #include "util/random.h"
 
 #define JELLYFISH
+//#define JELLYFISH_BLOOM
+#define JELLY_BLOOM
 
-#if 1
+
+#ifdef JELLYFISH_BLOOM
+#include "util/dynamic_bloom.h"
+#include "rocksdb/slice.h"
+#define JELLY_BLOOM_RATIO 0.01
+#define JELLYFISH_BLOOM_LOCALITY 0u // 0:no, 1:yes
+#endif
+
+#ifdef JELLYFISH
 #include "util/coding.h"
 #include <mutex>
 #include <cstdint>
-#define JELLYFISH
-
 #define MAX_HEIGHT 12
 #define P_FACTOR 4
 #endif
+
 namespace rocksdb {
 	template <class Comparator>
 	class InlineSkipList {
@@ -116,10 +125,17 @@ namespace rocksdb {
 		// keys, and will allocate memory using "*allocator".  Objects allocated
 		// in the allocator must remain allocated for the lifetime of the
 		// skiplist object.
+
 		explicit InlineSkipList(Comparator cmp, Allocator* allocator,
 			int32_t max_height = MAX_HEIGHT,
 			int32_t branching_factor = P_FACTOR);
 
+#ifdef JELLYFISH_BLOOM
+		explicit InlineSkipList(Comparator cmp, Allocator* allocator, size_t wbs,
+			int32_t max_height = MAX_HEIGHT,
+			int32_t branching_factor = P_FACTOR);
+
+#endif
 		// Allocates a key and a skip-list node, returning a pointer to the key
 		// portion of the node.  This method is thread-safe if the allocator
 		// is thread-safe.
@@ -128,6 +144,11 @@ namespace rocksdb {
 
 		// Allocate a splice using allocator.
 		Splice* AllocateSplice();
+
+#ifdef JELLY_BLOOM
+		bool Insert(const char* key, bool const may_contain);
+		bool InsertConcurrently(const char* key, bool const may_contain);
+#endif
 
 		// Inserts a key allocated by AllocateKey, after the actual key value
 		// has been filled in.
@@ -139,7 +160,6 @@ namespace rocksdb {
 #ifdef JELLYFISH
 		bool InsertChain_Concurrently(const char* key, const Splice* splice, int fl);
 #endif
-
 		// Inserts a key allocated by AllocateKey with a hint of last insert
 		// position in the skip-list. If hint points to nullptr, a new hint will be
 		// populated, which can be used in subsequent calls.
@@ -170,8 +190,14 @@ namespace rocksdb {
 		// inserted immediately after the splice.  allow_partial_splice_fix ==
 		// false has worse running time for the non-sequential case O(log N),
 		// but a better constant factor.
+
 		template <bool UseCAS>
+
+#ifdef JELLY_BLOOM
+		bool Insert(const char* key, Splice* splice, bool allow_partial_splice_fix, bool const may_contain);
+#else
 		bool Insert(const char* key, Splice* splice, bool allow_partial_splice_fix);
+#endif
 
 		// Returns true iff an entry that compares equal to key is in the list.
 		bool Contains(const char* key) const;
@@ -252,7 +278,9 @@ namespace rocksdb {
 									   // case.  It caches the prev and next found during the most recent
 									   // non-concurrent insertion.
 		Splice* seq_splice_;
-
+#ifdef JELLYFISH_BLOOM
+		std::unique_ptr<DynamicBloom> prefix_bloom_;
+#endif
 		inline int GetMaxHeight() const {
 			return max_height_.load(std::memory_order_relaxed);
 		}
@@ -795,7 +823,35 @@ namespace rocksdb {
 			head_->SetNext(i, nullptr);
 		}
 	}
+#ifdef JELLYFISH_BLOOM
+	template <class Comparator>
+	InlineSkipList<Comparator>::InlineSkipList(const Comparator cmp,
+		Allocator* allocator,
+		size_t wbs,
+		int32_t max_height,
+		int32_t branching_factor)
+		: kMaxHeight_(static_cast<uint16_t>(max_height)),
+		kBranching_(static_cast<uint16_t>(branching_factor)),
+		kScaledInverseBranching_((Random::kMaxNext + 1) / kBranching_),
+		compare_(cmp),
+		allocator_(allocator),
+		head_(AllocateNode(0, max_height)),
+		max_height_(1),
+		seq_splice_(AllocateSplice()) {
+		assert(max_height > 0 && kMaxHeight_ == static_cast<uint32_t>(max_height));
+		assert(branching_factor > 1 &&
+			kBranching_ == static_cast<uint32_t>(branching_factor));
+		assert(kScaledInverseBranching_ > 0);
 
+		for (int i = 0; i < kMaxHeight_; ++i) {
+			head_->SetNext(i, nullptr);
+		}
+#ifdef JELLYFISH_BLOOM
+	    prefix_bloom_.reset(new DynamicBloom(
+          static_cast<uint32_t>(static_cast<double>(wbs) * JELLY_BLOOM_RATIO) *  8u , JELLYFISH_BLOOM_LOCALITY));
+#endif 
+	}
+#endif
 	template <class Comparator>
 	char* InlineSkipList<Comparator>::AllocateKey(size_t key_size) {
 		return const_cast<char*>(AllocateNode(key_size, RandomHeight())->Key());
@@ -837,6 +893,23 @@ namespace rocksdb {
 		splice->next_ = reinterpret_cast<Node**>(raw + sizeof(Splice) + array_size);
 		return splice;
 	}
+#ifdef JELLY_BLOOM
+	template <class Comparator>
+	bool InlineSkipList<Comparator>::Insert(const char* key, bool const may_contain) {
+		return Insert<false>(key, seq_splice_, false, may_contain);
+	}
+
+	template <class Comparator>
+	bool InlineSkipList<Comparator>::InsertConcurrently(const char* key, bool const may_contain) {
+		Node* prev[kMaxPossibleHeight];
+		Node* next[kMaxPossibleHeight];
+		Splice splice;
+		splice.prev_ = prev;
+		splice.next_ = next;
+		return Insert<true>(key, &splice, false, may_contain);
+	}
+
+#endif
 	template <class Comparator>
 	bool InlineSkipList<Comparator>::Insert(const char* key) {
 		return Insert<false>(key, seq_splice_, false);
@@ -936,7 +1009,6 @@ namespace rocksdb {
 				if(insert_chain){
 					return i;
 				}
-
 		}
 		return -1;
 	}
@@ -952,10 +1024,17 @@ namespace rocksdb {
 				&splice->prev_[i], &splice->next_[i]);
 		}
 	}
+#ifdef JELLY_BLOOM
+	template <class Comparator>
+	template <bool UseCAS>
+	bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
+		bool allow_partial_splice_fix, bool const may_contain) {
+#else
 	template <class Comparator>
 	template <bool UseCAS>
 	bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
 		bool allow_partial_splice_fix) {
+#endif
 		Node* x = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 		int height = x->UnstashHeight();
 		assert(height >= 1 && height <= kMaxHeight_);
@@ -1058,6 +1137,11 @@ namespace rocksdb {
 			}
 		}
 		assert(recompute_height <= max_height);
+		if(may_contain){
+
+		}else{
+		
+		}
 #ifdef JELLYFISH
 		int rv=-1;
 #endif
@@ -1135,6 +1219,9 @@ namespace rocksdb {
 					}
 				}
 			}
+#ifdef JELLYFISH_BLOOM
+			prefix_bloom_->AddConcurrently(prefix_extractor_->Transform(key));
+#endif
 		}
 		else {
 			for (int i = 0; i < height; ++i) {
@@ -1162,6 +1249,9 @@ namespace rocksdb {
 				x->NoBarrier_SetNext(i, splice->next_[i]);
 				splice->prev_[i]->SetNext(i, x);
 			}
+#ifdef JELLYFISH_BLOOM
+			prefix_bloom_->Add(prefix_extractor_->Transform(key));
+#endif
 		}
 		if (splice_is_valid) {
 			for (int i = 0; i < height; ++i) {
@@ -1187,6 +1277,7 @@ namespace rocksdb {
 		else {
 			splice->height_ = 0;
 		}
+		
 		return true;
 	}
 #ifdef JELLYFISH

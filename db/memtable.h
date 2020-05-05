@@ -436,6 +436,11 @@ class MemTable {
   const SliceTransform* const prefix_extractor_;
   std::unique_ptr<DynamicBloom> prefix_bloom_;
 
+#ifdef JELLY_BLOOM
+  const SliceTransform* const jelly_extractor_;
+  std::unique_ptr<DynamicBloom> jelly_bloom_;
+#endif
+
   std::atomic<FlushStateEnum> flush_state_;
 
   Env* env_;
