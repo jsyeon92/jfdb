@@ -50,7 +50,7 @@ public:
   }
 
 #ifdef JELLY_BLOOM
-  virtual bool InsertKey(KeyHandle handle, bool const may_contain) override {
+  virtual bool InsertKey(KeyHandle handle, bool const may_contain){
     return skip_list_.Insert(static_cast<char*>(handle), may_contain);
   }
 #endif
@@ -71,8 +71,8 @@ public:
   }
 
 #ifdef JELLY_BLOOM
-	virtual void InsertConcurrently(KeyHandle handle bool const may_contain) override {
-    skip_list_.InsertConcurrently(static_cast<char*>(handle), may_contain);
+  virtual bool InsertKeyConcurrently(KeyHandle handle, bool const may_contain) {
+    return skip_list_.InsertConcurrently(static_cast<char*>(handle), may_contain);
   }
 #endif
 

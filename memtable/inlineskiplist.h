@@ -191,13 +191,13 @@ namespace rocksdb {
 		// false has worse running time for the non-sequential case O(log N),
 		// but a better constant factor.
 
-		template <bool UseCAS>
 
 #ifdef JELLY_BLOOM
+		template <bool UseCAS>
 		bool Insert(const char* key, Splice* splice, bool allow_partial_splice_fix, bool const may_contain);
-#else
-		bool Insert(const char* key, Splice* splice, bool allow_partial_splice_fix);
 #endif
+		template <bool UseCAS>
+		bool Insert(const char* key, Splice* splice, bool allow_partial_splice_fix);
 
 		// Returns true iff an entry that compares equal to key is in the list.
 		bool Contains(const char* key) const;
@@ -313,7 +313,9 @@ namespace rocksdb {
 		// Returns the earliest node with a key >= key.
 		// Return nullptr if there is no such node.
 		Node* FindGreaterOrEqual(const char* key) const;
-
+#ifdef JELLY_BLOOM
+		Node* FindGreaterOrEqual_Jelly(const char* key, Splice* splice, int* level);
+#endif
 		// Return the latest node with a key < key.
 		// Return head_ if there is no such node.
 		// Fills prev[level] with pointer to previous node at "level" for every
@@ -579,10 +581,9 @@ namespace rocksdb {
 				printf("SEEK FAIL\n");
 			}
 		}
-	
 #endif
-
 	}
+
 	template <class Comparator>
 	inline void InlineSkipList<Comparator>::Iterator::SeekForPrev(
 		const char* target) {
@@ -665,6 +666,53 @@ namespace rocksdb {
 		assert(n != head_);
 		return (n != nullptr) && (compare_(n->Key(), key) < 0);
 	}
+#ifdef JELLY_BLOOM
+	template <class Comparator>
+	typename InlineSkipList<Comparator>::Node*
+		InlineSkipList<Comparator>::FindGreaterOrEqual_Jelly(const char* key, Splice* splice, int* find_level){
+		// Note: It looks like we could reduce duplication by implementing
+		// this function as FindLessThan(key)->Next(0), but we wouldn't be able
+		// to exit early on equality and the result wouldn't even be correct.
+		// A concurrent insert might occur after FindLessThan(key) but before
+		// we get a chance to call Next(0).
+		Node* x = head_;
+		int level = GetMaxHeight() - 1;
+		Node* last_bigger = nullptr;
+		while (true) {
+			Node* next = x->Next(level);
+			if (next != nullptr) {
+				PREFETCH(next->Next(level), 0, 1);
+			}
+			// Make sure the lists are sorted
+			assert(x == head_ || next == nullptr || KeyIsAfterNode(next->Key(), x));
+			// Make sure we haven't overshot during our search
+			assert(x == head_ || KeyIsAfterNode(key, x));
+			int cmp = (next == nullptr || next == last_bigger)
+				? 1
+				: compare_(next->Key(), key, (uint64_t)1);
+			if (cmp == 0){
+				//found key
+				splice->next_[level]=next;	
+				*find_level=level;
+				return next;
+			}
+			else if ( cmp > 0 && level == 0) {
+				splice->prev_[level]=x;
+				splice->next_[level]=next;
+				return next;
+			}
+			else if (cmp < 0) {
+				// Keep searching in this list
+				x = next;
+			}
+			else {
+				// Switch to next list, reuse compare_() result
+				last_bigger = next;
+				level--;
+			}
+		}
+	}
+#endif
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::FindGreaterOrEqual(const char* key) const {
@@ -908,7 +956,6 @@ namespace rocksdb {
 		splice.next_ = next;
 		return Insert<true>(key, &splice, false, may_contain);
 	}
-
 #endif
 	template <class Comparator>
 	bool InlineSkipList<Comparator>::Insert(const char* key) {
@@ -1029,12 +1076,6 @@ namespace rocksdb {
 	template <bool UseCAS>
 	bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
 		bool allow_partial_splice_fix, bool const may_contain) {
-#else
-	template <class Comparator>
-	template <bool UseCAS>
-	bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
-		bool allow_partial_splice_fix) {
-#endif
 		Node* x = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 		int height = x->UnstashHeight();
 		assert(height >= 1 && height <= kMaxHeight_);
@@ -1137,11 +1178,279 @@ namespace rocksdb {
 			}
 		}
 		assert(recompute_height <= max_height);
-		if(may_contain){
 
-		}else{
-		
+		if(may_contain){///
+jelly_retry:
+			int find_level=-1;
+			FindGreaterOrEqual_Jelly(key, splice, &find_level);
+			if(find_level >= 0){
+				//found key
+				InsertChain_Concurrently(key, splice, find_level);
+				splice->height_=0;
+				return true;
+			}else{
+				//not found key
+				if(UseCAS){
+						x->NoBarrier_SetNext(0,splice->next_[0]);
+						if(splice->prev_[0]->CASNext(0, splice->next_[0],x)){
+							return true;
+						}
+						goto jelly_retry;
+				}else{
+					x->NoBarrier_SetNext(0,splice->next_[0]);
+					splice->prev_[0]->SetNext(0,x);
+					splice->height_=0;
+					return true;
+				}			
+			}
 		}
+
+#ifdef JELLYFISH
+		int rv=-1;
+#endif
+		if (recompute_height > 0) {
+#ifdef JELLYFISH
+			rv=RecomputeSpliceLevels_Equal(key, splice, recompute_height);
+#else
+			RecomputeSpliceLevels(key, splice, recompute_height);
+#endif
+		}
+#ifdef JELLYFISH
+		if(rv >=0){
+			InsertChain_Concurrently(key, splice, rv);
+			splice->height_=0;		
+			return true;
+		}
+#endif
+		bool splice_is_valid = true;
+		if (UseCAS) {
+			for (int i = 0; i < height; ++i) {
+				while (true) {
+#ifdef JELLYFISH
+					int retry=0;
+#endif
+					// Checking for duplicate keys on the level 0 is sufficient
+					if (UNLIKELY(i == 0 && splice->next_[i] != nullptr &&
+						compare_(x->Key(), splice->next_[i]->Key()) >= 0)) {
+						// duplicate key
+						return false;
+					}
+					if (UNLIKELY(i == 0 && splice->prev_[i] != head_ &&
+						compare_(splice->prev_[i]->Key(), x->Key()) >= 0)) {
+						// duplicate key
+						return false;
+					}
+					assert(splice->next_[i] == nullptr ||
+						compare_(x->Key(), splice->next_[i]->Key()) < 0);
+					assert(splice->prev_[i] == head_ ||
+						compare_(splice->prev_[i]->Key(), x->Key()) < 0);
+					x->NoBarrier_SetNext(i, splice->next_[i]);
+					if (splice->prev_[i]->CASNext(i, splice->next_[i], x)) {
+						// success
+						break;
+					}
+					// CAS failed, we need to recompute prev and next. It is unlikely
+					// to be helpful to try to use a different level as we redo the
+					// search, because it should be unlikely that lots of nodes have
+					// been inserted between prev[i] and next[i]. No point in using
+					// next[i] as the after hint, because we know it is stale.
+#ifdef JELLYFISH
+					retry++;
+					int already_chain_node=0;
+					FindSpliceForLevel_Equal<false>(key, splice->prev_[i], nullptr, i, &splice->prev_[i],&splice->next_[i], &already_chain_node);
+#else
+					FindSpliceForLevel<false>(key, splice->prev_[i], nullptr, i, &splice->prev_[i],
+						&splice->next_[i]);
+#endif
+#ifdef JELLYFISH
+					if(already_chain_node == 1){
+						//insert chain and return;
+						if(i == 0) {
+							InsertChain_Concurrently(key, splice, 0);
+							splice->height_=0;
+							return true;
+						}else{
+							printf("FAIL! FAIL! FAIL! FAIL!\n");
+						}
+					}
+#endif	
+					// Since we've narrowed the bracket for level i, we might have
+					// violated the Splice constraint between i and i-1.  Make sure
+					// we recompute the whole thing next time.
+					if (i > 0) {
+						splice_is_valid = false;
+					}
+				}
+			}
+#ifdef JELLYFISH_BLOOM
+			prefix_bloom_->AddConcurrently(prefix_extractor_->Transform(key));
+#endif
+		}
+		else {
+			for (int i = 0; i < height; ++i) {
+				if (i >= recompute_height &&
+					splice->prev_[i]->Next(i) != splice->next_[i]) {
+					FindSpliceForLevel<false>(key, splice->prev_[i], nullptr, i, &splice->prev_[i],
+						&splice->next_[i]);
+				}
+				// Checking for duplicate keys on the level 0 is sufficient
+				if (UNLIKELY(i == 0 && splice->next_[i] != nullptr &&
+					compare_(x->Key(), splice->next_[i]->Key()) >= 0)) {
+					// duplicate key
+					return false;
+				}
+				if (UNLIKELY(i == 0 && splice->prev_[i] != head_ &&
+					compare_(splice->prev_[i]->Key(), x->Key()) >= 0)) {
+					// duplicate key
+					return false;
+				}
+				assert(splice->next_[i] == nullptr ||
+					compare_(x->Key(), splice->next_[i]->Key()) < 0);
+				assert(splice->prev_[i] == head_ ||
+					compare_(splice->prev_[i]->Key(), x->Key()) < 0);
+				assert(splice->prev_[i]->Next(i) == splice->next_[i]);
+				x->NoBarrier_SetNext(i, splice->next_[i]);
+				splice->prev_[i]->SetNext(i, x);
+			}
+#ifdef JELLYFISH_BLOOM
+			prefix_bloom_->Add(prefix_extractor_->Transform(key));
+#endif
+		}
+		if (splice_is_valid) {
+			for (int i = 0; i < height; ++i) {
+				splice->prev_[i] = x;
+			}
+			assert(splice->prev_[splice->height_] == head_);
+			assert(splice->next_[splice->height_] == nullptr);
+			for (int i = 0; i < splice->height_; ++i) {
+				assert(splice->next_[i] == nullptr ||
+					compare_(key, splice->next_[i]->Key()) < 0);
+				assert(splice->prev_[i] == head_ ||
+					compare_(splice->prev_[i]->Key(), key) <= 0);
+				assert(splice->prev_[i + 1] == splice->prev_[i] ||
+					splice->prev_[i + 1] == head_ ||
+					compare_(splice->prev_[i + 1]->Key(), splice->prev_[i]->Key()) <
+					0);
+				assert(splice->next_[i + 1] == splice->next_[i] ||
+					splice->next_[i + 1] == nullptr ||
+					compare_(splice->next_[i]->Key(), splice->next_[i + 1]->Key()) <
+					0);
+			}
+		}
+		else {
+			splice->height_ = 0;
+		}
+		
+		return true;
+	}
+
+#endif
+	template <class Comparator>
+	template <bool UseCAS>
+	bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
+		bool allow_partial_splice_fix) {
+		Node* x = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
+		int height = x->UnstashHeight();
+		assert(height >= 1 && height <= kMaxHeight_);
+
+		int max_height = max_height_.load(std::memory_order_relaxed);
+		while (height > max_height) {
+			if (max_height_.compare_exchange_weak(max_height, height)) {
+				// successfully updated it
+				max_height = height;
+				break;
+			}
+			// else retry, possibly exiting the loop because somebody else
+			// increased it
+		}
+		assert(max_height <= kMaxPossibleHeight);
+		int recompute_height = 0;
+		if (splice->height_ < max_height) {
+			// Either splice has never been used or max_height has grown since
+			// last use.  We could potentially fix it in the latter case, but
+			// that is tricky.
+			splice->prev_[max_height] = head_;
+			splice->next_[max_height] = nullptr;
+			splice->height_ = max_height;
+			recompute_height = max_height;
+		}
+		else {
+			// Splice is a valid proper-height splice that brackets some
+			// key, but does it bracket this one?  We need to validate it and
+			// recompute a portion of the splice (levels 0..recompute_height-1)
+			// that is a superset of all levels that don't bracket the new key.
+			// Several choices are reasonable, because we have to balance the work
+			// saved against the extra comparisons required to validate the Splice.
+			//
+			// One strategy is just to recompute all of orig_splice_height if the
+			// bottom level isn't bracketing.  This pessimistically assumes that
+			// we will either get a perfect Splice hit (increasing sequential
+			// inserts) or have no locality.
+			//
+			// Another strategy is to walk up the Splice's levels until we find
+			// a level that brackets the key.  This strategy lets the Splice
+			// hint help for other cases: it turns insertion from O(log N) into
+			// O(log D), where D is the number of nodes in between the key that
+			// produced the Splice and the current insert (insertion is aided
+			// whether the new key is before or after the splice).  If you have
+			// a way of using a prefix of the key to map directly to the closest
+			// Splice out of O(sqrt(N)) Splices and we make it so that splices
+			// can also be used as hints during read, then we end up with Oshman's
+			// and Shavit's SkipTrie, which has O(log log N) lookup and insertion
+			// (compare to O(log N) for skip list).
+			//
+			// We control the pessimistic strategy with allow_partial_splice_fix.
+			// A good strategy is probably to be pessimistic for seq_splice_,
+			// optimistic if the caller actually went to the work of providing
+			// a Splice.
+			while (recompute_height < max_height) {
+				if (splice->prev_[recompute_height]->Next(recompute_height) !=
+					splice->next_[recompute_height]) {
+					// splice isn't tight at this level, there must have been some inserts
+					// to this
+					// location that didn't update the splice.  We might only be a little
+					// stale, but if
+					// the splice is very stale it would be O(N) to fix it.  We haven't used
+					// up any of
+					// our budget of comparisons, so always move up even if we are
+					// pessimistic about
+					// our chances of success.
+					++recompute_height;
+				}
+				else if (splice->prev_[recompute_height] != head_ &&
+					!KeyIsAfterNode(key, splice->prev_[recompute_height])) {
+					// key is from before splice
+					if (allow_partial_splice_fix) {
+						// skip all levels with the same node without more comparisons
+						Node* bad = splice->prev_[recompute_height];
+						while (splice->prev_[recompute_height] == bad) {
+							++recompute_height;
+						}
+					}
+					else {
+						// we're pessimistic, recompute everything
+						recompute_height = max_height;
+					}
+				}
+				else if (KeyIsAfterNode(key, splice->next_[recompute_height])) {
+					// key is from after splice
+					if (allow_partial_splice_fix) {
+						Node* bad = splice->next_[recompute_height];
+						while (splice->next_[recompute_height] == bad) {
+							++recompute_height;
+						}
+					}
+					else {
+						recompute_height = max_height;
+					}
+				}
+				else {
+					// this level brackets the key, we won!
+					break;
+				}
+			}
+		}
+		assert(recompute_height <= max_height);
 #ifdef JELLYFISH
 		int rv=-1;
 #endif

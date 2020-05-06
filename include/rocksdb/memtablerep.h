@@ -97,10 +97,17 @@ class MemTableRep {
   // REQUIRES: nothing that compares equal to key is currently in the
   // collection, and no concurrent modifications to the table in progress
   virtual void Insert(KeyHandle handle) = 0;
-
+	
   // Same as ::Insert
   // Returns false if MemTableRepFactory::CanHandleDuplicatedKey() is true and
   // the <key, seq> already exists.
+#ifdef JELLY_BLOOM
+  virtual bool InsertKey(KeyHandle handle, bool const ){
+		Insert(handle);
+		return true;
+	}
+#endif
+
   virtual bool InsertKey(KeyHandle handle) {
     Insert(handle);
     return true;
@@ -131,6 +138,12 @@ class MemTableRep {
   // Returns false if MemTableRepFactory::CanHandleDuplicatedKey() is true and
   // the <key, seq> already exists.
   virtual void InsertConcurrently(KeyHandle handle);
+#ifdef JELLY_BLOOM
+	virtual bool InsertKeyConcurrently(KeyHandle handle, bool const){
+		InsertConcurrently(handle);
+		return true;
+	}
+#endif
 
   // Same as ::InsertConcurrently
   // Returns false if MemTableRepFactory::CanHandleDuplicatedKey() is true and
