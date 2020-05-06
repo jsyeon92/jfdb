@@ -41,7 +41,7 @@
 #include <stdlib.h>
 #include <rocksdb/slice.h>
 #define JELLYFISH
-#define JELLYFISH_BLOOM
+//#define JELLYFISH_BLOOM
 namespace rocksdb {
 
 class Arena;

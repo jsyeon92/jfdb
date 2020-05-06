@@ -10,8 +10,8 @@ BASH_EXISTS := $(shell which bash)
 SHELL := $(shell which bash)
 
 CLEAN_FILES = # deliberately empty, so we can append below.
-CFLAGS += ${EXTRA_CFLAGS}
-CXXFLAGS += ${EXTRA_CXXFLAGS}
+CFLAGS += ${EXTRA_CFLAGS} 
+CXXFLAGS += ${EXTRA_CXXFLAGS} 
 LDFLAGS += $(EXTRA_LDFLAGS)
 MACHINE ?= $(shell uname -m)
 ARFLAGS = ${EXTRA_ARFLAGS} rs

@@ -387,7 +387,7 @@ namespace rocksdb {
 		// Stores the height of the node in the memory location normally used for
 		// next_[0].  This is used for passing data from AllocateKey to Insert.
 		void StashHeight(const int height) {
-			assert(sizeof(int) <= sizeof(next_[-2]));
+			assert(sizeof(int) <= sizeof(next_[-1]));
 			memcpy(&next_[-1], &height, sizeof(int));
 		}
 
@@ -1052,7 +1052,6 @@ namespace rocksdb {
 		for (i = recompute_level - 1; i >= 0; --i) {
 			FindSpliceForLevel_Equal<true>(key, splice->prev_[i + 1], splice->next_[i + 1], i,
 				&splice->prev_[i], &splice->next_[i], &insert_chain);
-
 				if(insert_chain){
 					return i;
 				}
@@ -1356,19 +1355,13 @@ jelly_retry:
 		int max_height = max_height_.load(std::memory_order_relaxed);
 		while (height > max_height) {
 			if (max_height_.compare_exchange_weak(max_height, height)) {
-				// successfully updated it
 				max_height = height;
 				break;
 			}
-			// else retry, possibly exiting the loop because somebody else
-			// increased it
 		}
 		assert(max_height <= kMaxPossibleHeight);
 		int recompute_height = 0;
 		if (splice->height_ < max_height) {
-			// Either splice has never been used or max_height has grown since
-			// last use.  We could potentially fix it in the latter case, but
-			// that is tricky.
 			splice->prev_[max_height] = head_;
 			splice->next_[max_height] = nullptr;
 			splice->height_ = max_height;

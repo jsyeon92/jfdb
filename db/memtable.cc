@@ -37,7 +37,7 @@
 #include "util/murmurhash.h"
 #include "util/mutexlock.h"
 
-#define JELLY_BLOOM_RATIO 0.01
+#define JELLY_BLOOM_RATIO 0.001
 #define JELLY_PREFIX 16
 namespace rocksdb {
 
@@ -106,7 +106,7 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
                  : 0),
       prefix_extractor_(ioptions.prefix_extractor),
 #ifdef JELLY_BLOOM
-			jelly_extractor_(rocksdb::NewFixedPrefixTransform((size_t)JELLY_PREFIX)),
+	jelly_extractor_(rocksdb::NewFixedPrefixTransform((size_t)JELLY_PREFIX)),
 #endif
       flush_state_(FLUSH_NOT_REQUESTED),
       env_(ioptions.env),
@@ -124,7 +124,7 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
         ioptions.info_log));
   }
 #ifdef JELLY_BLOOM
-		jelly_bloom_.reset(new DynamicBloom(static_cast<uint32_t>(static_cast<double>(mutable_cf_options.write_buffer_size) * JELLY_BLOOM_RATIO) *  8u, 0u));
+	jelly_bloom_.reset(new DynamicBloom(static_cast<uint32_t>(static_cast<double>(mutable_cf_options.write_buffer_size) * JELLY_BLOOM_RATIO) *  8u, 0u));
 #endif
 }
 
