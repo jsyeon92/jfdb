@@ -37,8 +37,13 @@
 #include "util/murmurhash.h"
 #include "util/mutexlock.h"
 
-#define JELLY_BLOOM_RATIO 0.001
+
+#define JELLY_BLOOM_RATIO 0.00001
 #define JELLY_PREFIX 16
+
+#ifdef JSYEON_DEBUG
+#include <stdio.h>
+#endif
 namespace rocksdb {
 
 ImmutableMemTableOptions::ImmutableMemTableOptions(
@@ -519,6 +524,12 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
   assert((unsigned)(p + val_size - buf) == (unsigned)encoded_len);
 #ifdef JELLY_BLOOM
   bool const may_contain = jelly_bloom_->MayContain(jelly_extractor_->Transform(key));//if found,set 1
+#if 0 // GARBAGE
+	if(may_contain)
+		printf("1\n");
+	else
+		printf("0\n");
+#endif 
 #endif
   if (!allow_concurrent) {
     // Extract prefix for insert with hint.
@@ -531,7 +542,7 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
       }
     } else {
 #ifdef JELLY_BLOOM
-			bool res = table->InsertKey(handle, may_contain);
+		bool res = table->InsertKey(handle, may_contain);
 #else
       bool res = table->InsertKey(handle);
 #endif
@@ -556,7 +567,8 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
       prefix_bloom_->Add(prefix_extractor_->Transform(key));
     }
 #ifdef JELLY_BLOOM
-		jelly_bloom_->Add(jelly_extractor_->Transform(key));
+		if(!may_contain)
+			jelly_bloom_->Add(jelly_extractor_->Transform(key));
 #endif
     // The first sequence number inserted into the memtable
     assert(first_seqno_ == 0 || s >= first_seqno_);
@@ -593,7 +605,8 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
       prefix_bloom_->AddConcurrently(prefix_extractor_->Transform(key));
     }
 #ifdef JELLY_BLOOM
-		jelly_bloom_->AddConcurrently(jelly_extractor_->Transform(key));
+		if(!may_contain)
+			jelly_bloom_->AddConcurrently(jelly_extractor_->Transform(key));
 #endif
     // atomically update first_seqno_ and earliest_seqno_.
     uint64_t cur_seq_num = first_seqno_.load(std::memory_order_relaxed);

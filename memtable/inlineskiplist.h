@@ -50,6 +50,13 @@
 #include "util/allocator.h"
 #include "util/random.h"
 
+
+// EUNJI TIME
+//nn#define EUNJI
+#include <time.h>
+#include <sys/time.h>
+
+
 #define JELLYFISH
 //#define JELLYFISH_BLOOM
 #define JELLY_BLOOM
@@ -91,7 +98,7 @@ namespace rocksdb {
 				std::string val_str;
 				key_str.assign(kkey.data(), kkey.size());
 				val_str.assign(value.data(), value.size());
-				printf("KEY : %16s | SEQ : %zu | VAL : %s | VAL_SIZE: %d\n", key_str.c_str(), anum, val_str.c_str(), (int)value.size());
+				//printf("KEY : %16s | SEQ : %zu | VAL : %s | VAL_SIZE: %d\n", key_str.c_str(), anum, val_str.c_str(), (int)value.size());
 				//printf(" SEQ : %zu", anum);
 			}
 			else
@@ -683,16 +690,12 @@ namespace rocksdb {
 			if (next != nullptr) {
 				PREFETCH(next->Next(level), 0, 1);
 			}
-			// Make sure the lists are sorted
-			assert(x == head_ || next == nullptr || KeyIsAfterNode(next->Key(), x));
-			// Make sure we haven't overshot during our search
-			assert(x == head_ || KeyIsAfterNode(key, x));
 			int cmp = (next == nullptr || next == last_bigger)
 				? 1
 				: compare_(next->Key(), key, (uint64_t)1);
 			if (cmp == 0){
 				//found key
-				splice->next_[level]=next;	
+				//splice->next_[level]=next;	
 				*find_level=level;
 				return next;
 			}
@@ -1178,40 +1181,80 @@ namespace rocksdb {
 		}
 		assert(recompute_height <= max_height);
 
+#ifdef EUNJI
+		struct timeval t_start;
+		struct timeval t_end;
+#endif
+
 		if(may_contain){///
 jelly_retry:
 			int find_level=-1;
+
+#ifdef EUNJI
+			gettimeofday(&t_start, NULL);
+#endif
 			FindGreaterOrEqual_Jelly(key, splice, &find_level);
+#ifdef EUNJI
+			gettimeofday(&t_end, NULL);
+			printf("seek: %f\n", (t_end.tv_sec - t_start.tv_sec) * 1000000.0 + 
+					(t_end.tv_usec - t_start.tv_usec));
+
+//			printf("seek: %f\n",	(t_end.tv_usec - t_start.tv_usec));
+		
+#endif
 			if(find_level >= 0){
 				//found key
 				InsertChain_Concurrently(key, splice, find_level);
+				//printf("2\n"); // GARBAGE
 				splice->height_=0;
 				return true;
-			}else{
+
+			} 
+#if 1
+			else { // false positive. key does not exist. 
 				//not found key
+				//printf("3\n");
 				if(UseCAS){
 						x->NoBarrier_SetNext(0,splice->next_[0]);
 						if(splice->prev_[0]->CASNext(0, splice->next_[0],x)){
 							return true;
 						}
 						goto jelly_retry;
-				}else{
+				} else {
+					// level = 1 
 					x->NoBarrier_SetNext(0,splice->next_[0]);
 					splice->prev_[0]->SetNext(0,x);
 					splice->height_=0;
 					return true;
 				}			
 			}
-		}
+#endif
+		} // end of may_contain 
 
+		// Miss in bloom filter 
 #ifdef JELLYFISH
 		int rv=-1;
 #endif
 		if (recompute_height > 0) {
+
+#ifdef EUNJI
+			gettimeofday(&t_start, NULL);
+#endif
 #ifdef JELLYFISH
 			rv=RecomputeSpliceLevels_Equal(key, splice, recompute_height);
 #else
 			RecomputeSpliceLevels(key, splice, recompute_height);
+#endif
+
+#ifdef EUNJI
+			gettimeofday(&t_end, NULL);
+//			printf("seek_with_splice: %6.2f\n", (t_end.tv_sec - t_start.tv_sec + 
+//					(t_end.tv_usec - t_start.tv_usec) / 1000000.0));
+
+			printf("seek_with_splice: %6.3f\n", (t_end.tv_sec - t_start.tv_sec) * 1000000.0 + 
+					(t_end.tv_usec - t_start.tv_usec));
+
+//			printf("seek_with_splice: %f\n",	(t_end.tv_usec - t_start.tv_usec));
 #endif
 		}
 #ifdef JELLYFISH
