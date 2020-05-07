@@ -51,7 +51,7 @@
 #include "util/random.h"
 
 #define JELLYFISH
-
+//#define JELLY_TEST
 #if 1
 #include "util/coding.h"
 #include <mutex>
@@ -137,7 +137,7 @@ namespace rocksdb {
 		bool Insert(const char* key);
 
 #ifdef JELLYFISH
-		bool InsertChain_Concurrently(const char* key, const Splice* splice, int fl);
+		bool InsertChain_Concurrently(Node* nnode, Node* curr);
 #endif
 
 		// Inserts a key allocated by AllocateKey with a hint of last insert
@@ -622,7 +622,7 @@ namespace rocksdb {
 	bool InlineSkipList<Comparator>::KeyIsAfterNode_Equal(const char* key,
 		Node* n, int* insert_chain) const {
 		assert(n != head_);
-		int cmp = compare_(n->Key(), key, (uint64_t)1);
+		int cmp = compare_.jelly(n->Key(), key);
 		if(cmp == 0){
 			*insert_chain=1;
 		}
@@ -660,7 +660,7 @@ namespace rocksdb {
 			int cmp = (next == nullptr || next == last_bigger)
 				? 1
 				//: compare_(next->Key(), key);
-				: compare_(next->Key(), key, (uint64_t)1);
+				: compare_.jelly(next->Key(), key);
 			if (cmp == 0 || (cmp > 0 && level == 0)) {
 //				printf("Level: %d\n", level);
 				return next;
@@ -932,11 +932,9 @@ namespace rocksdb {
 		for (i = recompute_level - 1; i >= 0; --i) {
 			FindSpliceForLevel_Equal<true>(key, splice->prev_[i + 1], splice->next_[i + 1], i,
 				&splice->prev_[i], &splice->next_[i], &insert_chain);
-
 				if(insert_chain){
 					return i;
 				}
-
 		}
 		return -1;
 	}
@@ -972,6 +970,14 @@ namespace rocksdb {
 		}
 		assert(max_height <= kMaxPossibleHeight);
 		int recompute_height = 0;
+#ifdef JELLY_TEST
+		if(!allow_partial_splice_fix){
+			splice->prev_[max_height] = head_;
+			splice->next_[max_height] = nullptr;
+			splice->height_ = max_height;
+			recompute_height = max_height;
+		}
+#else
 		if (splice->height_ < max_height) {
 			// Either splice has never been used or max_height has grown since
 			// last use.  We could potentially fix it in the latter case, but
@@ -1057,6 +1063,7 @@ namespace rocksdb {
 				}
 			}
 		}
+#endif
 		assert(recompute_height <= max_height);
 #ifdef JELLYFISH
 		int rv=-1;
@@ -1070,7 +1077,7 @@ namespace rocksdb {
 		}
 #ifdef JELLYFISH
 		if(rv >=0){
-			InsertChain_Concurrently(key, splice, rv);
+			InsertChain_Concurrently(x, splice->next_[rv]);
 			splice->height_=0;		
 			return true;
 		}
@@ -1079,9 +1086,6 @@ namespace rocksdb {
 		if (UseCAS) {
 			for (int i = 0; i < height; ++i) {
 				while (true) {
-#ifdef JELLYFISH
-					int retry=0;
-#endif
 					// Checking for duplicate keys on the level 0 is sufficient
 					if (UNLIKELY(i == 0 && splice->next_[i] != nullptr &&
 						compare_(x->Key(), splice->next_[i]->Key()) >= 0)) {
@@ -1108,7 +1112,6 @@ namespace rocksdb {
 					// been inserted between prev[i] and next[i]. No point in using
 					// next[i] as the after hint, because we know it is stale.
 #ifdef JELLYFISH
-					retry++;
 					int already_chain_node=0;
 					FindSpliceForLevel_Equal<false>(key, splice->prev_[i], nullptr, i, &splice->prev_[i],&splice->next_[i], &already_chain_node);
 #else
@@ -1119,7 +1122,7 @@ namespace rocksdb {
 					if(already_chain_node == 1){
 						//insert chain and return;
 						if(i == 0) {
-							InsertChain_Concurrently(key, splice, 0);
+							InsertChain_Concurrently(x, splice->next_[0]);
 							splice->height_=0;
 							return true;
 						}else{
@@ -1191,12 +1194,10 @@ namespace rocksdb {
 	}
 #ifdef JELLYFISH
 	template <class Comparator>
-	bool InlineSkipList<Comparator>::InsertChain_Concurrently(const char * key, const Splice* splice, int fl) {
-		Node* curr = splice->next_[fl];
+	bool InlineSkipList<Comparator>::InsertChain_Concurrently(Node* nnode, Node* curr) {
 
-		Node* nnode = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
+		uint64_t new_seq = GetSequenceNum(nnode->Key());
 		Node* chain_header;
-		uint64_t new_seq = GetSequenceNum(key);
 retry:
 		chain_header = curr->GetChain();//node level 0 
 

@@ -71,7 +71,9 @@ class MemTableRep {
     // are equal, and a positive value if a is greater than b
 #ifdef JELLYFISH
 	virtual int operator()(const char* prefix_len_key1,
-						   const char* prefix_len_key2, uint64_t tmp)const=0;
+						   const char* prefix_len_key2, uint64_t tmp) const = 0;
+		virtual int jelly(const char* prefix_len_key1, const char* prefix_len_key2) const = 0;
+		virtual int jelly(const char* prefix_len_key1, const Slice& key) const = 0;
 #endif
     virtual int operator()(const char* prefix_len_key1,
                            const char* prefix_len_key2) const = 0;

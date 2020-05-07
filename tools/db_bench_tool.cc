@@ -78,6 +78,8 @@
 #include <io.h>  // open/close
 #endif
 
+#define JSYEON_UNIQ
+
 using GFLAGS_NAMESPACE::ParseCommandLineFlags;
 using GFLAGS_NAMESPACE::RegisterFlagValidator;
 using GFLAGS_NAMESPACE::SetUsageMessage;
@@ -3615,6 +3617,9 @@ void VerifyDBFromDB(std::string& truth_db_name) {
 
     int64_t stage = 0;
     int64_t num_written = 0;
+#ifdef JSYEON_UNIQ
+	uint64_t thread_interval_key = thread->tid * num_;
+#endif
     while (!duration.Done(entries_per_batch_)) {
       if (duration.GetStage() != stage) {
         stage = duration.GetStage();
@@ -3642,7 +3647,11 @@ void VerifyDBFromDB(std::string& truth_db_name) {
       }
 
       for (int64_t j = 0; j < entries_per_batch_; j++) {
+#ifdef JSYEON_UNIQ
+		int64_t rand_num = key_gens[id]->Next() + thread_interval_key;
+#else
         int64_t rand_num = key_gens[id]->Next();
+#endif
         GenerateKeyFromInt(rand_num, FLAGS_num, &key);
         if (use_blob_db_) {
 #ifndef ROCKSDB_LITE
