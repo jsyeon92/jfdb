@@ -51,23 +51,12 @@
 #include "util/random.h"
 
 
-// EUNJI TIME
-//nn#define EUNJI
 #include <time.h>
 #include <sys/time.h>
 
 
 #define JELLYFISH
-//#define JELLYFISH_BLOOM
 #define JELLY_BLOOM
-
-
-#ifdef JELLYFISH_BLOOM
-#include "util/dynamic_bloom.h"
-#include "rocksdb/slice.h"
-#define JELLY_BLOOM_RATIO 0.01
-#define JELLYFISH_BLOOM_LOCALITY 0u // 0:no, 1:yes
-#endif
 
 #ifdef JELLYFISH
 #include "util/coding.h"
@@ -137,18 +126,14 @@ namespace rocksdb {
 			int32_t max_height = MAX_HEIGHT,
 			int32_t branching_factor = P_FACTOR);
 
-#ifdef JELLYFISH_BLOOM
-		explicit InlineSkipList(Comparator cmp, Allocator* allocator, size_t wbs,
-			int32_t max_height = MAX_HEIGHT,
-			int32_t branching_factor = P_FACTOR);
-
-#endif
 		// Allocates a key and a skip-list node, returning a pointer to the key
 		// portion of the node.  This method is thread-safe if the allocator
 		// is thread-safe.
 
 		char* AllocateKey(size_t key_size);
-
+#ifdef JELLY_BLOOM
+		char* AllocateKey_Jelly(size_t key_size);
+#endif
 		// Allocate a splice using allocator.
 		Splice* AllocateSplice();
 
@@ -164,9 +149,6 @@ namespace rocksdb {
 		// REQUIRES: no concurrent calls to any of inserts.
 		bool Insert(const char* key);
 
-#ifdef JELLYFISH
-		bool InsertChain_Concurrently(const char* key, const Splice* splice, int fl);
-#endif
 		// Inserts a key allocated by AllocateKey with a hint of last insert
 		// position in the skip-list. If hint points to nullptr, a new hint will be
 		// populated, which can be used in subsequent calls.
@@ -280,14 +262,16 @@ namespace rocksdb {
 		// Modified only by Insert().  Read racily by readers, but stale
 		// values are ok.
 		std::atomic<int> max_height_;  // Height of the entire list
+#ifdef JELLY_LEVEL1
+		std::atomic<int> height_coin;
+#endif
+
 
 									   // seq_splice_ is a Splice used for insertions in the non-concurrent
 									   // case.  It caches the prev and next found during the most recent
 									   // non-concurrent insertion.
 		Splice* seq_splice_;
-#ifdef JELLYFISH_BLOOM
-		std::unique_ptr<DynamicBloom> prefix_bloom_;
-#endif
+
 		inline int GetMaxHeight() const {
 			return max_height_.load(std::memory_order_relaxed);
 		}
@@ -315,13 +299,14 @@ namespace rocksdb {
 		// is considered infinite.  n should not be head_.
 		bool KeyIsAfterNode(const char* key, Node* n) const;
 #ifdef JELLYFISH
+		bool InsertChain_Concurrently(const char* key, Node* curr);
 		bool KeyIsAfterNode_Equal(const char* key, Node* n, int* insert_chain) const;
 #endif
 		// Returns the earliest node with a key >= key.
 		// Return nullptr if there is no such node.
 		Node* FindGreaterOrEqual(const char* key) const;
 #ifdef JELLY_BLOOM
-		Node* FindGreaterOrEqual_Jelly(const char* key, Splice* splice, int* level);
+		Node* FindGreaterOrEqual_Jelly(const char* key);
 #endif
 		// Return the latest node with a key < key.
 		// Return head_ if there is no such node.
@@ -676,12 +661,10 @@ namespace rocksdb {
 #ifdef JELLY_BLOOM
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
-		InlineSkipList<Comparator>::FindGreaterOrEqual_Jelly(const char* key, Splice* splice, int* find_level){
-		// Note: It looks like we could reduce duplication by implementing
-		// this function as FindLessThan(key)->Next(0), but we wouldn't be able
-		// to exit early on equality and the result wouldn't even be correct.
-		// A concurrent insert might occur after FindLessThan(key) but before
-		// we get a chance to call Next(0).
+		InlineSkipList<Comparator>::FindGreaterOrEqual_Jelly(const char* key){
+#ifdef JELLY_LEVEL1
+level1:
+#endif
 		Node* x = head_;
 		int level = GetMaxHeight() - 1;
 		Node* last_bigger = nullptr;
@@ -694,15 +677,18 @@ namespace rocksdb {
 				? 1
 				: compare_(next->Key(), key, (uint64_t)1);
 			if (cmp == 0){
-				//found key
-				//splice->next_[level]=next;	
-				*find_level=level;
 				return next;
 			}
 			else if ( cmp > 0 && level == 0) {
-				splice->prev_[level]=x;
-				splice->next_[level]=next;
-				return next;
+#ifdef JELLY_LEVEL1
+				Node* key_node = reinterpret_cast<Node*>(const_cast<char*>(key)) -1;
+				key_node->NoBarrier_SetNext(0,next);
+				if(x->CASNext(0,next,key_node))
+					return nullptr;	
+				goto level1;
+#else
+					return nullptr;
+#endif
 			}
 			else if (cmp < 0) {
 				// Keep searching in this list
@@ -864,53 +850,47 @@ namespace rocksdb {
 		allocator_(allocator),
 		head_(AllocateNode(0, max_height)),
 		max_height_(1),
-		seq_splice_(AllocateSplice()) {
-		assert(max_height > 0 && kMaxHeight_ == static_cast<uint32_t>(max_height));
-		assert(branching_factor > 1 &&
-			kBranching_ == static_cast<uint32_t>(branching_factor));
-		assert(kScaledInverseBranching_ > 0);
-
-		for (int i = 0; i < kMaxHeight_; ++i) {
-			head_->SetNext(i, nullptr);
-		}
-	}
-#ifdef JELLYFISH_BLOOM
-	template <class Comparator>
-	InlineSkipList<Comparator>::InlineSkipList(const Comparator cmp,
-		Allocator* allocator,
-		size_t wbs,
-		int32_t max_height,
-		int32_t branching_factor)
-		: kMaxHeight_(static_cast<uint16_t>(max_height)),
-		kBranching_(static_cast<uint16_t>(branching_factor)),
-		kScaledInverseBranching_((Random::kMaxNext + 1) / kBranching_),
-		compare_(cmp),
-		allocator_(allocator),
-		head_(AllocateNode(0, max_height)),
-		max_height_(1),
-		seq_splice_(AllocateSplice()) {
-		assert(max_height > 0 && kMaxHeight_ == static_cast<uint32_t>(max_height));
-		assert(branching_factor > 1 &&
-			kBranching_ == static_cast<uint32_t>(branching_factor));
-		assert(kScaledInverseBranching_ > 0);
-
-		for (int i = 0; i < kMaxHeight_; ++i) {
-			head_->SetNext(i, nullptr);
-		}
-#ifdef JELLYFISH_BLOOM
-	    prefix_bloom_.reset(new DynamicBloom(
-          static_cast<uint32_t>(static_cast<double>(wbs) * JELLY_BLOOM_RATIO) *  8u , JELLYFISH_BLOOM_LOCALITY));
-#endif 
-	}
+#ifdef JELLY_LEVEL1
+		height_coin(0),	
 #endif
+		seq_splice_(AllocateSplice()) {
+		assert(max_height > 0 && kMaxHeight_ == static_cast<uint32_t>(max_height));
+		assert(branching_factor > 1 &&
+			kBranching_ == static_cast<uint32_t>(branching_factor));
+		assert(kScaledInverseBranching_ > 0);
+
+		for (int i = 0; i < kMaxHeight_; ++i) {
+			head_->SetNext(i, nullptr);
+		}
+	}
 	template <class Comparator>
 	char* InlineSkipList<Comparator>::AllocateKey(size_t key_size) {
 		return const_cast<char*>(AllocateNode(key_size, RandomHeight())->Key());
 	}
 
+#ifdef JELLY_BLOOM
+	template <class Comparator>
+	char* InlineSkipList<Comparator>::AllocateKey_Jelly(size_t key_size) {
+#ifdef JELLY_LEVEL1
+		height_coin.fetch_add(1);
+		return const_cast<char*>(AllocateNode(key_size, 0)->Key());
+#else
+		return const_cast<char*>(AllocateNode(key_size, RandomHeight())->Key());
+#endif
+	}
+#endif
+
 	template <class Comparator>
 	typename InlineSkipList<Comparator>::Node*
 		InlineSkipList<Comparator>::AllocateNode(size_t key_size, int height) {
+#ifdef JELLY_LEVEL1
+		if(height_coin.load() > 4 && height == 1){
+			height_coin.fetch_sub(4);	 
+			height = 2;
+		}else if(height == 0){
+			height=1;
+		}
+#endif
 		auto prefix = sizeof(std::atomic<Node*>) * (height);
 		// prefix is space for the height - 1 pointers that we store before
 		// the Node instance (next_[-(height - 1) .. -1]).  Node starts at
@@ -952,12 +932,7 @@ namespace rocksdb {
 
 	template <class Comparator>
 	bool InlineSkipList<Comparator>::InsertConcurrently(const char* key, bool const may_contain) {
-		Node* prev[kMaxPossibleHeight];
-		Node* next[kMaxPossibleHeight];
-		Splice splice;
-		splice.prev_ = prev;
-		splice.next_ = next;
-		return Insert<true>(key, &splice, false, may_contain);
+			return Insert<true>(key, nullptr, false, may_contain);
 	}
 #endif
 	template <class Comparator>
@@ -1078,6 +1053,25 @@ namespace rocksdb {
 	template <bool UseCAS>
 	bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
 		bool allow_partial_splice_fix, bool const may_contain) {
+
+		if(may_contain){
+			Node* f_node = FindGreaterOrEqual_Jelly(key);
+			if(f_node){ //found key
+				InsertChain_Concurrently(key, f_node);
+				return true;
+			}
+#ifdef JELLY_LEVEL1 
+			return true;
+#endif 
+		} // end of may_contain 
+
+		Node* prev[kMaxPossibleHeight];
+		Node* next[kMaxPossibleHeight];
+		Splice tmp;
+		splice = &tmp;
+		splice->prev_ = prev;
+		splice->next_ = next;
+
 		Node* x = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 		int height = x->UnstashHeight();
 		assert(height >= 1 && height <= kMaxHeight_);
@@ -1181,89 +1175,21 @@ namespace rocksdb {
 		}
 		assert(recompute_height <= max_height);
 
-#ifdef EUNJI
-		struct timeval t_start;
-		struct timeval t_end;
-#endif
-
-		if(may_contain){///
-jelly_retry:
-			int find_level=-1;
-
-#ifdef EUNJI
-			gettimeofday(&t_start, NULL);
-#endif
-			FindGreaterOrEqual_Jelly(key, splice, &find_level);
-#ifdef EUNJI
-			gettimeofday(&t_end, NULL);
-			printf("seek: %f\n", (t_end.tv_sec - t_start.tv_sec) * 1000000.0 + 
-					(t_end.tv_usec - t_start.tv_usec));
-
-//			printf("seek: %f\n",	(t_end.tv_usec - t_start.tv_usec));
-		
-#endif
-			if(find_level >= 0){
-				//found key
-				InsertChain_Concurrently(key, splice, find_level);
-				//printf("2\n"); // GARBAGE
-				splice->height_=0;
-				return true;
-
-			} 
-#if 1
-			else { // false positive. key does not exist. 
-				//not found key
-				//printf("3\n");
-				if(UseCAS){
-						x->NoBarrier_SetNext(0,splice->next_[0]);
-						if(splice->prev_[0]->CASNext(0, splice->next_[0],x)){
-							return true;
-						}
-						goto jelly_retry;
-				} else {
-					// level = 1 
-					x->NoBarrier_SetNext(0,splice->next_[0]);
-					splice->prev_[0]->SetNext(0,x);
-					splice->height_=0;
-					return true;
-				}			
-			}
-#endif
-		} // end of may_contain 
-
 		// Miss in bloom filter 
 #ifdef JELLYFISH
-		int rv=-1;
 #endif
 		if (recompute_height > 0) {
-
-#ifdef EUNJI
-			gettimeofday(&t_start, NULL);
-#endif
 #ifdef JELLYFISH
+			int rv=-1;
 			rv=RecomputeSpliceLevels_Equal(key, splice, recompute_height);
+			if(rv >= 0){
+				InsertChain_Concurrently(key, splice->next_[rv]);
+				return true;
+			}
 #else
 			RecomputeSpliceLevels(key, splice, recompute_height);
 #endif
-
-#ifdef EUNJI
-			gettimeofday(&t_end, NULL);
-//			printf("seek_with_splice: %6.2f\n", (t_end.tv_sec - t_start.tv_sec + 
-//					(t_end.tv_usec - t_start.tv_usec) / 1000000.0));
-
-			printf("seek_with_splice: %6.3f\n", (t_end.tv_sec - t_start.tv_sec) * 1000000.0 + 
-					(t_end.tv_usec - t_start.tv_usec));
-
-//			printf("seek_with_splice: %f\n",	(t_end.tv_usec - t_start.tv_usec));
-#endif
 		}
-#ifdef JELLYFISH
-		if(rv >=0){
-			InsertChain_Concurrently(key, splice, rv);
-			splice->height_=0;		
-			return true;
-		}
-#endif
 		bool splice_is_valid = true;
 		if (UseCAS) {
 			for (int i = 0; i < height; ++i) {
@@ -1308,7 +1234,7 @@ jelly_retry:
 					if(already_chain_node == 1){
 						//insert chain and return;
 						if(i == 0) {
-							InsertChain_Concurrently(key, splice, 0);
+							InsertChain_Concurrently(key, splice->next_[0]);
 							splice->height_=0;
 							return true;
 						}else{
@@ -1324,9 +1250,6 @@ jelly_retry:
 					}
 				}
 			}
-#ifdef JELLYFISH_BLOOM
-			prefix_bloom_->AddConcurrently(prefix_extractor_->Transform(key));
-#endif
 		}
 		else {
 			for (int i = 0; i < height; ++i) {
@@ -1354,9 +1277,6 @@ jelly_retry:
 				x->NoBarrier_SetNext(i, splice->next_[i]);
 				splice->prev_[i]->SetNext(i, x);
 			}
-#ifdef JELLYFISH_BLOOM
-			prefix_bloom_->Add(prefix_extractor_->Transform(key));
-#endif
 		}
 		if (splice_is_valid) {
 			for (int i = 0; i < height; ++i) {
@@ -1499,7 +1419,7 @@ jelly_retry:
 		}
 #ifdef JELLYFISH
 		if(rv >=0){
-			InsertChain_Concurrently(key, splice, rv);
+			InsertChain_Concurrently(key, splice->next_[rv]);
 			splice->height_=0;		
 			return true;
 		}
@@ -1508,9 +1428,6 @@ jelly_retry:
 		if (UseCAS) {
 			for (int i = 0; i < height; ++i) {
 				while (true) {
-#ifdef JELLYFISH
-					int retry=0;
-#endif
 					// Checking for duplicate keys on the level 0 is sufficient
 					if (UNLIKELY(i == 0 && splice->next_[i] != nullptr &&
 						compare_(x->Key(), splice->next_[i]->Key()) >= 0)) {
@@ -1537,7 +1454,6 @@ jelly_retry:
 					// been inserted between prev[i] and next[i]. No point in using
 					// next[i] as the after hint, because we know it is stale.
 #ifdef JELLYFISH
-					retry++;
 					int already_chain_node=0;
 					FindSpliceForLevel_Equal<false>(key, splice->prev_[i], nullptr, i, &splice->prev_[i],&splice->next_[i], &already_chain_node);
 #else
@@ -1548,7 +1464,7 @@ jelly_retry:
 					if(already_chain_node == 1){
 						//insert chain and return;
 						if(i == 0) {
-							InsertChain_Concurrently(key, splice, 0);
+							InsertChain_Concurrently(key, splice->next_[0]);
 							splice->height_=0;
 							return true;
 						}else{
@@ -1564,9 +1480,6 @@ jelly_retry:
 					}
 				}
 			}
-#ifdef JELLYFISH_BLOOM
-			prefix_bloom_->AddConcurrently(prefix_extractor_->Transform(key));
-#endif
 		}
 		else {
 			for (int i = 0; i < height; ++i) {
@@ -1594,9 +1507,6 @@ jelly_retry:
 				x->NoBarrier_SetNext(i, splice->next_[i]);
 				splice->prev_[i]->SetNext(i, x);
 			}
-#ifdef JELLYFISH_BLOOM
-			prefix_bloom_->Add(prefix_extractor_->Transform(key));
-#endif
 		}
 		if (splice_is_valid) {
 			for (int i = 0; i < height; ++i) {
@@ -1627,8 +1537,8 @@ jelly_retry:
 	}
 #ifdef JELLYFISH
 	template <class Comparator>
-	bool InlineSkipList<Comparator>::InsertChain_Concurrently(const char * key, const Splice* splice, int fl) {
-		Node* curr = splice->next_[fl];
+	bool InlineSkipList<Comparator>::InsertChain_Concurrently(const char * key, Node* curr) {
+//		Node* curr = splice->next_[fl];
 
 		Node* nnode = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
 		Node* chain_header;

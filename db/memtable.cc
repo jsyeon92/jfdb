@@ -80,16 +80,9 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
               ? &mem_tracker_
               : nullptr,
           mutable_cf_options.memtable_huge_page_size),
-#ifdef JELLYFISH_BLOOM
-	table_(ioptions.memtable_factory->CreateMemTableRep(
-          comparator_, &arena_, ioptions.prefix_extractor, ioptions.info_log,
-          column_family_id, mutable_cf_options.write_buffer_size)),
-
-#else
       table_(ioptions.memtable_factory->CreateMemTableRep(
           comparator_, &arena_, ioptions.prefix_extractor, ioptions.info_log,
           column_family_id)),
-#endif
       range_del_table_(SkipListFactory().CreateMemTableRep(
           comparator_, &arena_, nullptr /* transform */, ioptions.info_log,
           column_family_id)),
@@ -294,7 +287,12 @@ KeyHandle MemTableRep::Allocate(const size_t len, char** buf) {
   *buf = allocator_->Allocate(len);
   return static_cast<KeyHandle>(*buf);
 }
-
+#ifdef JELLY_BLOOM
+KeyHandle MemTableRep::Allocate_Jelly(const size_t len, char** buf) {
+  *buf = allocator_->Allocate(len);
+  return static_cast<KeyHandle>(*buf);
+}
+#endif
 // Encode a suitable internal key target for "target" and return it.
 // Uses *scratch as scratch space, and the returned pointer will point
 // into this scratch space.
@@ -501,6 +499,11 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
   //  key bytes    : char[internal_key.size()]
   //  value_size   : varint32 of value.size()
   //  value bytes  : char[value.size()]
+
+#ifdef JELLY_BLOOM
+  bool const may_contain = jelly_bloom_->MayContain(jelly_extractor_->Transform(key));//if found,set 1
+#endif
+
   uint32_t key_size = static_cast<uint32_t>(key.size());
   uint32_t val_size = static_cast<uint32_t>(value.size());
   uint32_t internal_key_size = key_size + 8;
@@ -510,7 +513,15 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
   char* buf = nullptr;
   std::unique_ptr<MemTableRep>& table =
       type == kTypeRangeDeletion ? range_del_table_ : table_;
+#ifdef JELLY_BLOOM1
+	KeyHandle handle;
+	if(may_contain)
+	  handle = table->Allocate_Jelly(encoded_len, &buf);
+	else	
+	  handle = table->Allocate(encoded_len, &buf);
+#else
   KeyHandle handle = table->Allocate(encoded_len, &buf);
+#endif
 
   char* p = EncodeVarint32(buf, internal_key_size);
   memcpy(p, key.data(), key_size);
@@ -522,15 +533,6 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
   p = EncodeVarint32(p, val_size);
   memcpy(p, value.data(), val_size);
   assert((unsigned)(p + val_size - buf) == (unsigned)encoded_len);
-#ifdef JELLY_BLOOM
-  bool const may_contain = jelly_bloom_->MayContain(jelly_extractor_->Transform(key));//if found,set 1
-#if 0 // GARBAGE
-	if(may_contain)
-		printf("1\n");
-	else
-		printf("0\n");
-#endif 
-#endif
   if (!allow_concurrent) {
     // Extract prefix for insert with hint.
     if (insert_with_hint_prefix_extractor_ != nullptr &&
@@ -542,7 +544,7 @@ bool MemTable::Add(SequenceNumber s, ValueType type,
       }
     } else {
 #ifdef JELLY_BLOOM
-		bool res = table->InsertKey(handle, may_contain);
+			bool res = table->InsertKey(handle, may_contain);
 #else
       bool res = table->InsertKey(handle);
 #endif

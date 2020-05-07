@@ -27,21 +27,18 @@ public:
        transform_(transform),
        lookahead_(lookahead) {}
 
-#ifdef JELLYFISH_BLOOM
- explicit SkipListRep(const MemTableRep::KeyComparator& compare,
-                      Allocator* allocator, const SliceTransform* transform,
-                      const size_t lookahead, size_t wbs)
-     : MemTableRep(allocator),
-       skip_list_(compare, allocator, wbs),
-       cmp_(compare),
-       transform_(transform),
-       lookahead_(lookahead) {}
-#endif
 
  virtual KeyHandle Allocate(const size_t len, char** buf) override {
    *buf = skip_list_.AllocateKey(len);
    return static_cast<KeyHandle>(*buf);
   }
+
+#ifdef JELLY_BLOOM
+ virtual KeyHandle Allocate_Jelly(const size_t len, char** buf) override {
+   *buf = skip_list_.AllocateKey_Jelly(len);
+   return static_cast<KeyHandle>(*buf);
+  }
+#endif
 
   // Insert key into the list.
   // REQUIRES: nothing that compares equal to key is currently in the list.
@@ -334,14 +331,6 @@ public:
   }
 };
 }
-#ifdef JELLYFISH_BLOOM
-MemTableRep* SkipListFactory::CreateMemTableRep(
-    const MemTableRep::KeyComparator& compare, Allocator* allocator,
-    const SliceTransform* transform, Logger* /*logger*/, size_t wbs) {
-
-  return new SkipListRep(compare, allocator, transform, lookahead_, wbs);
-}
-#endif
 
 MemTableRep* SkipListFactory::CreateMemTableRep(
     const MemTableRep::KeyComparator& compare, Allocator* allocator,
