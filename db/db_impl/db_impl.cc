@@ -3775,7 +3775,7 @@ void DumpRocksDBBuildVersion(Logger* log) {
 #if !defined(IOS_CROSS_COMPILE)
   // if we compile with Xcode, we don't run build_detect_version, so we don't
   // generate util/build_version.cc
-  ROCKS_LOG_HEADER(log, "RocksDB version: %d.%d.%d\n", ROCKSDB_MAJOR,
+  ROCKS_LOG_HEADER(log, "RocksDB Jelly version: %d.%d.%d\n", ROCKSDB_MAJOR,
                    ROCKSDB_MINOR, ROCKSDB_PATCH);
   ROCKS_LOG_HEADER(log, "Git sha %s", rocksdb_build_git_sha);
   ROCKS_LOG_HEADER(log, "Compile date %s", rocksdb_build_compile_date);

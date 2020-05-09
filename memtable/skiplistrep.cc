@@ -76,7 +76,7 @@ public:
    // All memory is allocated through allocator; nothing to report here
    return 0;
  }
-#ifdef JELLYFISH
+#ifdef JELLYFISH1
  void Get(const LookupKey& k, void* callback_args,
           bool (*callback_func)(void* arg, const char* entry)) override {
    SkipListRep::Iterator iter(&skip_list_);
@@ -139,7 +139,7 @@ public:
     // REQUIRES: Valid()
     void Prev() override { iter_.Prev(); }
 
-#ifdef JELLYFISH
+#ifdef JELLYFISH1
 		void Seek_Chain(const Slice& user_key, const char* memtable_key){
 			if(memtable_key != nullptr){
 				iter_.Seek_Chain(memtable_key);

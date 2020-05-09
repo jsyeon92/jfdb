@@ -661,6 +661,7 @@ inline int InternalKeyComparator::CompareKeySeq(const Slice& akey,
   }
   return r;
 }
+
 #ifdef JELLYFISH
 inline
 int InternalKeyComparator::CompareKeySeq_Jelly(const Slice& akey,
@@ -671,8 +672,8 @@ int InternalKeyComparator::CompareKeySeq_Jelly(const Slice& akey,
   int r = user_comparator_.Compare(ExtractUserKey(akey), ExtractUserKey(bkey));
   return r;
 }
-
 #endif
+
 // Wrap InternalKeyComparator as a comparator class for ParsedInternalKey.
 struct ParsedInternalKeyComparator {
   explicit ParsedInternalKeyComparator(const InternalKeyComparator* c)

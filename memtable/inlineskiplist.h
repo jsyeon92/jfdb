@@ -441,7 +441,7 @@ inline const char* InlineSkipList<Comparator>::Iterator::key() const {
 	if (chain_ == nullptr)
 		return node_->Key();
 	else
-	  return node_->Key();
+	  return chain_->Key();
 }
 
 template <class Comparator>
@@ -557,12 +557,14 @@ inline void InlineSkipList<Comparator>::Iterator::SeekForPrev(
 template <class Comparator>
 inline void InlineSkipList<Comparator>::Iterator::SeekToFirst() {
 	node_ = list_->head_->Next(0);
-	Node* t = node_->GetChain();
-	if (t == nullptr) {
-		chain_ = nullptr;
-	}
-	else {
-		chain_ = t;
+	if(node_ != nullptr){		
+		Node* t = node_->GetChain();
+		if (t == nullptr) {
+			chain_ = nullptr;
+		}
+		else {
+			chain_ = t;
+		}
 	}
 }
 
@@ -606,7 +608,7 @@ template <class Comparator>
 bool InlineSkipList<Comparator>::KeyIsAfterNode_Equal(const char* key,
 	Node* n, int* insert_chain) const {
 	assert(n != head_);
-	int cmp = compare_(n->Key(), key, (uint64_t)1);
+	int cmp = compare_.jelly(n->Key(), key);
 	if(cmp == 0){
 		*insert_chain=1;
 	}
@@ -654,7 +656,7 @@ InlineSkipList<Comparator>::FindGreaterOrEqual(const char* key) const {
 #ifdef JELLYFISH
     int cmp = (next == nullptr || next == last_bigger)
                   ? 1
-                  : compare_(next->Key(), key_decoded, (uint64_t)1);
+                  : compare_.jelly(next->Key(), key_decoded);
 #endif
     if (cmp == 0 || (cmp > 0 && level == 0)) {
       return next;
@@ -952,11 +954,9 @@ void InlineSkipList<Comparator>::FindSpliceForLevel(const DecodedKey& key,
 		for (i = recompute_level - 1; i >= 0; --i) {
 			FindSpliceForLevel_Equal<true>(key, splice->prev_[i + 1], splice->next_[i + 1], i,
 				&splice->prev_[i], &splice->next_[i], &insert_chain);
-
 				if(insert_chain){
 					return i;
 				}
-
 		}
 		return -1;
 	}
@@ -1103,7 +1103,6 @@ bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
 #ifdef JELLYFISH
 				int retry=0;
 #endif
-
         // Checking for duplicate keys on the level 0 is sufficient
         if (UNLIKELY(i == 0 && splice->next_[i] != nullptr &&
                      compare_(x->Key(), splice->next_[i]->Key()) >= 0)) {
