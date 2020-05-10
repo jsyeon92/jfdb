@@ -54,6 +54,7 @@
 #include "util/random.h"
 
 #define JELLYFISH
+#define JELLYFISH_DEBUG
 
 #ifdef JELLYFISH
 #include "util/coding.h"
@@ -103,7 +104,7 @@ class InlineSkipList {
   // REQUIRES: no concurrent calls to any of inserts.
   bool Insert(const char* key);
 #ifdef JELLYFISH
-  bool InsertChain_Concurrently(const char* key, const Splice* splice, int fl);
+  bool InsertChain_Concurrently(Node* nnode, Node* curr);
 #endif
 
   // Inserts a key allocated by AllocateKey with a hint of last insert
@@ -127,6 +128,14 @@ class InlineSkipList {
   // Like Insert, but external synchronization is not required.
   bool InsertConcurrently(const char* key);
 
+#ifdef JELLYFISH_DEBUG
+	~InlineSkipList() override{
+		printf("[JELLY] Insert Count  %llu\n", insert_cnt.load() );
+		printf("[JELLY] Chain  Count	%llu\n", chain_cnt.load());
+		printf("[JELLY] Seek() Count	%llu\n", seek_cnt.load());
+		printf("[JELLY] Next() Count 	%llu\n", next_cnt.load());
+	}
+#endif
   // Inserts a node into the skip list.  key must have been allocated by
   // AllocateKey and then filled in by the caller.  If UseCAS is true,
   // then external synchronization is not required, otherwise this method
@@ -174,7 +183,7 @@ class InlineSkipList {
     const char* key() const;
 
 #ifdef JELLYFISH
-	void NextChain();
+		void NextChain();
 #endif
 
     // Advances to the next position.
@@ -222,6 +231,13 @@ class InlineSkipList {
   // Immutable after construction
   Comparator const compare_;
   Node* const head_;
+
+#ifdef JELLYFISH_DEBUG
+	std::atomic<uint64_t> insert_cnt;
+	std::atomic<uint64_t> chain_cnt;
+	std::atomic<uint64_t> seek_cnt;
+	std::atomic<uint64_t> next_cnt;
+#endif
 
   // Modified only by Insert().  Read racily by readers, but stale
   // values are ok.
@@ -339,20 +355,20 @@ struct InlineSkipList<Comparator>::Node {
   // next_[0].  This is used for passing data from AllocateKey to Insert.
   void StashHeight(const int height) {
     assert(sizeof(int) <= sizeof(next_[0]));
-    memcpy(static_cast<void*>(&next_[0]), &height, sizeof(int));
+    memcpy(static_cast<void*>(&next_[-1]), &height, sizeof(int));
   }
 
   // Retrieves the value passed to StashHeight.  Undefined after a call
   // to SetNext or NoBarrier_SetNext.
   int UnstashHeight() const {
     int rv;
-    memcpy(&rv, &next_[0], sizeof(int));
+    memcpy(&rv, &next_[-1], sizeof(int));
     return rv;
   }
 
 #ifdef JELLYFISH
 	void InitChain(){
-		next_[0].store(nullptr, std::memory_order_acquire);
+		next_[0].store(nullptr, std::memory_order_release);
 	}
 	Node* GetChain() const {
 		return next_[0].load(std::memory_order_acquire);
@@ -448,6 +464,9 @@ template <class Comparator>
 inline void InlineSkipList<Comparator>::Iterator::Next() {
   assert(Valid());
   node_ = node_->Next(0);
+#ifdef JELLYFISH_DEBUG
+	next_cnt.fetch_add(1);
+#endif
 	if(node_ != nullptr){
 		chain_ = node_->GetChain();
 	}else{
@@ -522,6 +541,9 @@ inline void InlineSkipList<Comparator>::Iterator::Seek(const char* target) {
 			chain_ = node_->GetChain();//Get level 0 
 		}
 #else
+#ifdef JELLYFISH_DEBUG
+	seek_cnt.fetch_add(1);
+#endif
 	node_ = list_->FindGreaterOrEqual(target); //real Level1 (virtual level 0 )
  	if(node_ != nullptr){
 		chain_ = node_->GetChain();//Get level 0 
@@ -529,14 +551,21 @@ inline void InlineSkipList<Comparator>::Iterator::Seek(const char* target) {
 				return ;
 		else{
 			uint64_t seek_seq = GetSequenceNum(target);
+			uint64_t chain_seq = -1;
 			while(chain_ != nullptr){
-				uint64_t chain_seq = GetSequenceNum(chain_->Key());
+				chain_seq = GetSequenceNum(chain_->Key());
 				if(seek_seq >= chain_seq)
 					return ;
 				else
+#ifdef JELLYFISH_DEBUG1
+					printf("[JELLYFISH] Seek num : %llu /chain node : %llu\n", seek_seq,chain_seq);
+#endif
 					chain_=chain_->GetChain();
 			}
-			printf("SEEK FAIL\n");
+			chain_=nullptr;
+#ifdef JELLYFISH_DEBUG1
+			printf("[JELLYFISH] SEEK FAIL!! Seek num : %llu / Chin num : %llu\n", seek_seq, chain_seq );
+#endif
 		}
 	}	
 #endif
@@ -774,6 +803,12 @@ InlineSkipList<Comparator>::InlineSkipList(const Comparator cmp,
       allocator_(allocator),
       compare_(cmp),
       head_(AllocateNode(0, max_height)),
+#ifdef JELLYFISH_DEBUG
+			insert_cnt(0),
+			chain_cnt(0),
+			seek_cnt(0),
+			next_cnt(0),
+#endif
       max_height_(1),
       seq_splice_(AllocateSplice()) {
   assert(max_height > 0 && kMaxHeight_ == static_cast<uint32_t>(max_height));
@@ -978,6 +1013,10 @@ template <class Comparator>
 template <bool UseCAS>
 bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
                                         bool allow_partial_splice_fix) {
+
+#ifdef JELLYFISH_DEBUG
+	insert_cnt.fetch_add(1);	
+#endif
   Node* x = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
   const DecodedKey key_decoded = compare_.decode_key(key);
   int height = x->UnstashHeight();
@@ -1083,26 +1122,21 @@ bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
 #endif
 		if (recompute_height > 0) {
 #ifdef JELLYFISH
+research:
 			rv=RecomputeSpliceLevels_Equal(key, splice, recompute_height);
+			if(rv >=0){
+				InsertChain_Concurrently(x, splice->next_[rv]);
+				splice->height_=0;		
+				return true;
+			}
 #else
 			RecomputeSpliceLevels(key, splice, recompute_height);
 #endif
 		}
-#ifdef JELLYFISH
-		if(rv >=0){
-			InsertChain_Concurrently(key, splice, rv);
-			splice->height_=0;		
-			return true;
-		}
-#endif
-
   bool splice_is_valid = true;
   if (UseCAS) {
     for (int i = 0; i < height; ++i) {
       while (true) {
-#ifdef JELLYFISH
-				int retry=0;
-#endif
         // Checking for duplicate keys on the level 0 is sufficient
         if (UNLIKELY(i == 0 && splice->next_[i] != nullptr &&
                      compare_(x->Key(), splice->next_[i]->Key()) >= 0)) {
@@ -1128,19 +1162,19 @@ bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
         // search, because it should be unlikely that lots of nodes have
         // been inserted between prev[i] and next[i]. No point in using
         // next[i] as the after hint, because we know it is stale.
-#ifdef JELLYFISH
-					retry++;
+				goto research;
+#ifdef JELLYFISH_TEST
 					int already_chain_node=0;
 					FindSpliceForLevel_Equal<false>(key, splice->prev_[i], nullptr, i, &splice->prev_[i],&splice->next_[i], &already_chain_node);
 #else
 					FindSpliceForLevel<false>(key, splice->prev_[i], nullptr, i, &splice->prev_[i],
 						&splice->next_[i]);
 #endif
-#ifdef JELLYFISH
+#ifdef JELLYFISH_TEST
 					if(already_chain_node == 1){
 						//insert chain and return;
 						if(i == 0) {
-							InsertChain_Concurrently(key, splice, 0);
+							InsertChain_Concurrently(x, splice->next_[0]);
 							splice->height_=0;
 							return true;
 						}else{
@@ -1211,12 +1245,12 @@ bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
 }
 #ifdef JELLYFISH
 template <class Comparator>
-bool InlineSkipList<Comparator>::InsertChain_Concurrently(const char * key, const Splice* splice, int fl) {
-	Node* curr = splice->next_[fl];
-	Node* nnode = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
+bool InlineSkipList<Comparator>::InsertChain_Concurrently(Node* nnode, Node* curr) {
 	Node* chain_header;
-	uint64_t new_seq = GetSequenceNum(key);
-
+	uint64_t new_seq = GetSequenceNum(nnode->Key());
+#ifdef JELLYFISH_DEBUG
+	chain_cnt.fetch_add();
+#endif
 retry:
 		chain_header = curr->GetChain();//node level 0 
 		if (chain_header == nullptr) {
@@ -1227,11 +1261,14 @@ retry:
 				}else
 					goto retry;
 			}else{
+#ifdef JELLYFISH_DEBUG
+				printf("[JELLYFISH] Don't add chain %llu\n", new_seq);
+#endif
 				return true;
 			}
 		}
 		else {
-#if 1
+#if 0
 			uint64_t header_seq = GetSequenceNum(chain_header->Key());	
 			if(new_seq > header_seq){
 				nnode->SetUpdateChain(chain_header);
@@ -1243,6 +1280,9 @@ retry:
 					goto retry;
 				}
 			}else{
+#ifdef JELLYFISH_DEBUG
+				printf("[JELLYFISH] Don't add chain %llu\n", new_seq);
+#endif
 				return true;
 			}
 
